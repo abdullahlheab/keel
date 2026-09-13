@@ -26,7 +26,7 @@ export function renderShell(root, { onSignOut }) {
   const backdrop = h('div', { class: 'sidebar-backdrop', hidden: true, onclick: () => closeDrawer() });
   const topbar = h('div', { class: 'topbar' },
     h('button', { class: 'btn btn-icon', 'aria-label': 'Menu', onclick: () => openDrawer() }, icon('menu')),
-    h('span', { class: 'title' }, state.company?.name || 'Company Tracker'),
+    h('span', { class: 'title' }, state.company?.name || 'Keel'),
     button('New', { variant: 'primary', size: 'sm', icon: 'plus', onclick: (e) => quickMenu(e.currentTarget) }));
   const main = h('main', { class: 'main' }, topbar, viewEl);
   mount(root, h('div', { class: 'app' }, sidebar, main), backdrop);
@@ -63,8 +63,8 @@ function buildSidebar() {
   const { sidebar } = els;
   const company = state.company;
   const brandBtn = h('button', { class: 'brand', type: 'button', title: 'Switch company' },
-    h('span', { class: 'brand-key' }, company?.key || 'CT'),
-    h('span', { class: 'grow' }, h('div', { class: 'brand-name truncate' }, company?.name || 'Company Tracker'), h('div', { class: 'brand-sub' }, state.role ? `${state.role} · ${state.members.length || 1} member${state.members.length === 1 ? '' : 's'}` : '')),
+    h('span', { class: 'brand-key' }, company?.key || 'K'),
+    h('span', { class: 'grow' }, h('div', { class: 'brand-name truncate' }, company?.name || 'Keel'), h('div', { class: 'brand-sub' }, state.role ? `${state.role} · ${state.members.length || 1} member${state.members.length === 1 ? '' : 's'}` : '')),
     state.companies.length > 1 ? icon('chevronDown', { size: 14 }) : null);
   const brand = state.companies.length > 1
     ? menu(brandBtn, state.companies.map((c) => ({ label: `${c.name} (${c.role})`, icon: c.id === state.companyId ? 'check' : 'folder', onclick: () => { selectCompany(c.id); window.location.reload(); } })), { align: 'left' })
@@ -99,7 +99,7 @@ function buildSidebar() {
     nav,
     h('div', { class: 'sidebar-spacer' }),
     h('div', { class: 'sidebar-footer' }, themeBtn, userMenu));
-  if (els.topbar) els.topbar.querySelector('.title').textContent = company?.name || 'Company Tracker';
+  if (els.topbar) els.topbar.querySelector('.title').textContent = company?.name || 'Keel';
   setActiveNav(currentActive);
 }
 

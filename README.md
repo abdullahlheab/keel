@@ -1,4 +1,6 @@
-# Company Tracker
+# Keel
+
+Keel keeps a small company steady.
 
 A self-hosted workspace for a small company: **projects, expenses with receipts, a company-wide spending summary, a Kanban task board, an activity log, and team accounts** — with everything sensitive encrypted at rest.
 
@@ -49,21 +51,21 @@ Both of you need to reach the same server. Pick one:
 1. **A small VPS + Caddy (recommended).** Any $5 box works. Caddy gives you automatic HTTPS:
 
    ```text
-   tracker.yourdomain.com {
+   keel.yourdomain.com {
        reverse_proxy 127.0.0.1:3000
    }
    ```
 
-   Then in `.env`: `HOST=127.0.0.1`, `TRUST_PROXY=true`, `SECURE_COOKIES=true`, `NODE_ENV=production`, `APP_URL=https://tracker.yourdomain.com`. Run it with Docker (below) or `pm2`/`systemd`.
+   Then in `.env`: `HOST=127.0.0.1`, `TRUST_PROXY=true`, `SECURE_COOKIES=true`, `NODE_ENV=production`, `APP_URL=https://keel.yourdomain.com`. Run it with Docker (below) or `pm2`/`systemd`.
 
 2. **Docker anywhere** (Railway, Fly.io, Render, a NAS, a home server):
 
    ```bash
    npm run setup                # creates .env with ENCRYPTION_KEY
-   docker compose up -d --build # data persists in the company-tracker-data volume
+   docker compose up -d --build # data persists in the keel-data volume
    ```
 
-   The container restarts automatically with Docker. `docker compose stop` pauses it, `docker compose logs -f` shows logs, and `docker compose up -d --build` again picks up code changes. Data lives in the `company-tracker-data` volume, not in the project folder; to move an existing local `data` folder in, stop the container, `docker cp ./data/. company-tracker:/data/`, fix ownership with `docker run --rm --user root -v company-tracker-data:/data alpine chown -R 1000:1000 /data`, and start it again. Backups: `docker compose exec tracker npm run backup` then `docker cp company-tracker:/data/backups ./backups`.
+   The container restarts automatically with Docker. `docker compose stop` pauses it, `docker compose logs -f` shows logs, and `docker compose up -d --build` again picks up code changes. Data lives in the `keel-data` volume, not in the project folder; to move an existing local `data` folder in, stop the container, `docker cp ./data/. keel:/data/`, fix ownership with `docker run --rm --user root -v keel-data:/data alpine chown -R 1000:1000 /data`, and start it again. Backups: `docker compose exec keel npm run backup` then `docker cp keel:/data/backups ./backups`.
 
    Put the same `ENCRYPTION_KEY` in the platform's secret store if it does not read `.env`. Set `SECURE_COOKIES=true` once it is behind HTTPS.
 

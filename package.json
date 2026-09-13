@@ -1,7 +1,7 @@
 {
-  "name": "company-tracker",
+  "name": "keel",
   "version": "1.0.0",
-  "description": "Self-hosted company tracker: projects, expenses, task board, team accounts. Encrypted at rest.",
+  "description": "Keel: self-hosted workspace for a small company - projects, expenses, task board, team accounts. Encrypted at rest.",
   "type": "module",
   "private": true,
   "engines": {

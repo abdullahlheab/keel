@@ -5,7 +5,7 @@ import path from 'node:path';
 
 export async function bootServer(env = {}) {
   process.env.NODE_ENV = 'test';
-  process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'ct-test-'));
+  process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-test-'));
   process.env.ENV_FILE = path.join(process.env.DATA_DIR, '.env');
   process.env.ENCRYPTION_KEY = Buffer.alloc(32, 7).toString('base64');
   for (const [k, v] of Object.entries(env)) process.env[k] = v;
@@ -34,7 +34,7 @@ export function client(base) {
     for (const sc of res.headers.getSetCookie?.() || []) {
       const [pair] = sc.split(';');
       const [name, value] = pair.split('=');
-      if (name === 'ct_session') cookie = value ? `ct_session=${value}` : null;
+      if (name === 'keel_session') cookie = value ? `keel_session=${value}` : null;
     }
     const ct = res.headers.get('content-type') || '';
     const data = ct.includes('application/json') ? await res.json() : (opts.raw ? Buffer.from(await res.arrayBuffer()) : await res.text());

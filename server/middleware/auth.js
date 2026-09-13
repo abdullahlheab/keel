@@ -4,7 +4,7 @@ import { db, now, one } from '../db.js';
 import { uid, randomToken, sha256 } from '../crypto.js';
 import { HttpError, unauthorized, forbidden } from './errors.js';
 
-export const COOKIE = 'ct_session';
+export const COOKIE = 'keel_session';
 export const ROLE_RANK = { member: 1, admin: 2, owner: 3 };
 
 function parseCookies(header = '') {

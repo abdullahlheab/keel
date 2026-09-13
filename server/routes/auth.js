@@ -202,7 +202,7 @@ router.post('/me/mfa/setup', requireAuth, authLimiter, async (req, res) => {
   if (req.user.totp_enabled) throw new HttpError(409, 'Two-factor authentication is already enabled');
   const secret = generateTotpSecret();
   db.prepare('UPDATE users SET totp_secret_enc = ? WHERE id = ?').run(encrypt(secret), req.user.id);
-  const url = otpauthUrl('Company Tracker', req.user.email, secret);
+  const url = otpauthUrl('Keel', req.user.email, secret);
   const qrDataUrl = await QRCode.toDataURL(url, { margin: 1, width: 220 });
   res.json({ secret, otpauthUrl: url, qrDataUrl });
 });

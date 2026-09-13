@@ -14,7 +14,7 @@ export const state = {
   theme: 'system',
 };
 
-const COMPANY_KEY = 'ct.companyId';
+const COMPANY_KEY = 'keel.companyId';
 
 export function setSession(payload) {
   state.user = payload?.user || null;
@@ -64,10 +64,10 @@ export function applyTheme(theme) {
   const root = document.documentElement;
   if (theme === 'system') root.removeAttribute('data-theme');
   else root.setAttribute('data-theme', theme);
-  try { localStorage.setItem('ct.theme', theme); } catch { /* ignore */ }
+  try { localStorage.setItem('keel.theme', theme); } catch { /* ignore */ }
 }
 export function loadTheme() {
   let t = 'system';
-  try { t = localStorage.getItem('ct.theme') || 'system'; } catch { /* ignore */ }
+  try { t = localStorage.getItem('keel.theme') || 'system'; } catch { /* ignore */ }
   applyTheme(t);
 }

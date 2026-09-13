@@ -1,14 +1,14 @@
 # Start:   docker compose up -d --build
-# Stop:    docker compose stop        (data is kept in the company-tracker-data volume)
+# Stop:    docker compose stop        (data is kept in the keel-data volume)
 # Logs:    docker compose logs -f
-# Backup:  docker compose exec tracker npm run backup   then   docker cp company-tracker:/data/backups ./backups
+# Backup:  docker compose exec keel npm run backup   then   docker cp keel:/data/backups ./backups
 #
 # Reads ENCRYPTION_KEY (and optionally APP_URL, SECURE_COOKIES, ALLOW_OPEN_SIGNUP) from the .env file next to this file.
 services:
-  tracker:
+  keel:
     build: .
-    image: company-tracker
-    container_name: company-tracker
+    image: keel
+    container_name: keel
     restart: unless-stopped
     ports:
       - "3000:3000"
@@ -18,8 +18,8 @@ services:
       SECURE_COOKIES: ${SECURE_COOKIES:-false}
       ALLOW_OPEN_SIGNUP: ${ALLOW_OPEN_SIGNUP:-false}
     volumes:
-      - tracker-data:/data
+      - keel-data:/data
 
 volumes:
-  tracker-data:
-    name: company-tracker-data
+  keel-data:
+    name: keel-data

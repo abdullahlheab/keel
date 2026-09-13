@@ -5,7 +5,7 @@ import { createApp } from './app.js';
 const app = createApp();
 const server = app.listen(config.port, config.host, () => {
   const host = config.host === '0.0.0.0' ? 'localhost' : config.host;
-  console.log(`Company Tracker listening on http://${host}:${config.port}  (env: ${config.env}, data: ${config.dataDir})`);
+  console.log(`Keel listening on http://${host}:${config.port}  (env: ${config.env}, data: ${config.dataDir})`);
   if (!config.isProd) console.log('Tip: set NODE_ENV=production, TRUST_PROXY=true and SECURE_COOKIES=true when deploying behind HTTPS.');
 });
 

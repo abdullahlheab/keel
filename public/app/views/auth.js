@@ -8,7 +8,7 @@ import { icon } from '../components/ui.js';
 const CURRENCIES = ['USD', 'EUR', 'GBP', 'CAD', 'AUD', 'AED', 'SAR', 'INR', 'PKR', 'EGP', 'JPY', 'CHF', 'SEK', 'NOK', 'DKK', 'NZD', 'SGD', 'HKD', 'ZAR', 'BRL', 'MXN', 'TRY', 'NGN', 'KES'];
 
 function logo() {
-  return h('div', { class: 'auth-logo' }, h('span', { class: 'brand-key' }, 'CT'), 'Company Tracker');
+  return h('div', { class: 'auth-logo' }, h('span', { class: 'brand-key' }, 'K'), 'Keel');
 }
 function page(card) { return h('div', { class: 'auth' }, card); }
 
@@ -84,7 +84,7 @@ export async function renderInvite(root, ctx) {
       h('button', { class: 'btn btn-primary btn-lg btn-block', type: 'submit' }, `Join ${info.companyName}`));
     handleSubmit(form, async () => {
       const res = await api.post(`/api/auth/invites/${encodeURIComponent(token)}/accept`, {});
-      try { localStorage.setItem('ct.companyId', res.companyId); } catch { /* ignore */ }
+      try { localStorage.setItem('keel.companyId', res.companyId); } catch { /* ignore */ }
       ctx.onSignedIn(res, '/');
     });
     return mount(root, page(h('div', { class: 'card auth-card' }, logo(), h('h1', {}, 'You are invited'), intro, form)));
@@ -96,7 +96,7 @@ export async function renderInvite(root, ctx) {
     h('button', { class: 'btn btn-primary btn-lg btn-block', type: 'submit' }, 'Create account & join'));
   handleSubmit(form, async (data) => {
     const res = await api.post(`/api/auth/invites/${encodeURIComponent(token)}/accept`, data);
-    try { localStorage.setItem('ct.companyId', res.companyId); } catch { /* ignore */ }
+    try { localStorage.setItem('keel.companyId', res.companyId); } catch { /* ignore */ }
     ctx.onSignedIn(res, '/');
   });
   mount(root, page(h('div', { class: 'card auth-card' }, logo(), h('h1', {}, 'You are invited'), intro, form,
