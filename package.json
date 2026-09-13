@@ -1,0 +1,22 @@
+{
+  "name": "company-tracker",
+  "version": "1.0.0",
+  "description": "Self-hosted company tracker: projects, expenses, task board, team accounts. Encrypted at rest.",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "start": "node --disable-warning=ExperimentalWarning server/index.js",
+    "dev": "node --disable-warning=ExperimentalWarning --watch server/index.js",
+    "setup": "node scripts/setup.js",
+    "backup": "node --disable-warning=ExperimentalWarning scripts/backup.js",
+    "test": "node --disable-warning=ExperimentalWarning --test \"test/*.test.js\"",
+    "reset-password": "node --disable-warning=ExperimentalWarning scripts/reset-password.js"
+  },
+  "dependencies": {
+    "express": "^5.1.0",
+    "qrcode": "^1.5.4"
+  }
+}

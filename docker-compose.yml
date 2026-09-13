@@ -1,0 +1,25 @@
+# Start:   docker compose up -d --build
+# Stop:    docker compose stop        (data is kept in the company-tracker-data volume)
+# Logs:    docker compose logs -f
+# Backup:  docker compose exec tracker npm run backup   then   docker cp company-tracker:/data/backups ./backups
+#
+# Reads ENCRYPTION_KEY (and optionally APP_URL, SECURE_COOKIES, ALLOW_OPEN_SIGNUP) from the .env file next to this file.
+services:
+  tracker:
+    build: .
+    image: company-tracker
+    container_name: company-tracker
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      ENCRYPTION_KEY: "${ENCRYPTION_KEY:?Set ENCRYPTION_KEY in .env first (npm run setup)}"
+      APP_URL: ${APP_URL:-}
+      SECURE_COOKIES: ${SECURE_COOKIES:-false}
+      ALLOW_OPEN_SIGNUP: ${ALLOW_OPEN_SIGNUP:-false}
+    volumes:
+      - tracker-data:/data
+
+volumes:
+  tracker-data:
+    name: company-tracker-data

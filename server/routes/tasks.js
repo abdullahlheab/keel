@@ -1,0 +1,181 @@
+// Task board: tasks, ordering within columns, comments.
+import { Router } from 'express';
+import { db, tx, now, one, all } from '../db.js';
+import { uid, encrypt, encryptJSON } from '../crypto.js';
+import { validate, rules } from '../validate.js';
+import { HttpError, notFound, forbidden } from '../middleware/errors.js';
+import { hasRole } from '../middleware/auth.js';
+import { logActivity } from '../services/activity.js';
+import { taskRow, commentRow, nextTaskNumber, listProjects } from '../services/repo.js';
+
+const router = Router();
+export const STATUSES = ['backlog', 'todo', 'in_progress', 'review', 'done'];
+const PRIORITIES = ['low', 'medium', 'high', 'urgent'];
+const STATUS_LABEL = { backlog: 'Backlog', todo: 'To do', in_progress: 'In progress', review: 'In review', done: 'Done' };
+
+const checklistItem = { type: 'object' };
+const schema = {
+  title: rules.string({ required: true, min: 1, max: 200 }),
+  description: rules.string({ max: 10000 }),
+  projectId: rules.id(),
+  status: rules.enum(STATUSES, { default: 'todo' }),
+  priority: rules.enum(PRIORITIES, { default: 'medium' }),
+  assigneeUserId: rules.id(),
+  dueDate: rules.date(),
+  labels: rules.array(rules.string({ min: 1, max: 30 }), { max: 10 }),
+  checklist: rules.array(checklistItem, { max: 50 }),
+};
+
+function cleanChecklist(list) {
+  if (!Array.isArray(list)) return [];
+  return list.slice(0, 50).map((item) => ({
+    id: typeof item?.id === 'string' && item.id.length <= 40 ? item.id : uid(),
+    text: String(item?.text ?? '').trim().slice(0, 300),
+    done: Boolean(item?.done),
+  })).filter((i) => i.text);
+}
+
+function checkRefs(companyId, body) {
+  if (body.projectId && !one('SELECT id FROM projects WHERE id = ? AND company_id = ?', body.projectId, companyId)) throw new HttpError(400, 'Please fix the highlighted fields', { fields: { projectId: 'Unknown project' } });
+  if (body.assigneeUserId && !one('SELECT id FROM memberships WHERE user_id = ? AND company_id = ?', body.assigneeUserId, companyId)) throw new HttpError(400, 'Please fix the highlighted fields', { fields: { assigneeUserId: 'Not a member' } });
+}
+
+const TASK_SELECT = `SELECT t.*, (SELECT count(*) FROM task_comments c WHERE c.task_id = t.id) AS comment_count FROM tasks t`;
+
+function loadTask(companyId, id) {
+  const row = one(`${TASK_SELECT} WHERE t.id = ? AND t.company_id = ?`, id, companyId);
+  return row ? taskRow(row) : null;
+}
+
+function taskRef(req, task) { return `${req.company.key}-${task.number}`; }
+
+router.get('/tasks', (req, res) => {
+  let items = all(`${TASK_SELECT} WHERE t.company_id = ? ORDER BY t.status, t.position, t.created_at`, req.company.id).map(taskRow);
+  const q = req.query;
+  if (q.project === 'none') items = items.filter((t) => !t.projectId);
+  else if (q.project) items = items.filter((t) => t.projectId === q.project);
+  if (q.assignee === 'none') items = items.filter((t) => !t.assigneeUserId);
+  else if (q.assignee) items = items.filter((t) => t.assigneeUserId === q.assignee);
+  if (q.status) items = items.filter((t) => t.status === q.status);
+  if (q.priority) items = items.filter((t) => t.priority === q.priority);
+  if (q.label) items = items.filter((t) => t.labels.includes(q.label));
+  if (q.q) {
+    const needle = String(q.q).toLowerCase();
+    items = items.filter((t) => t.title.toLowerCase().includes(needle) || (t.description || '').toLowerCase().includes(needle) || `${req.company.key}-${t.number}`.toLowerCase() === needle);
+  }
+  res.json({ items });
+});
+
+router.post('/tasks', (req, res) => {
+  const body = validate(schema, req.body);
+  checkRefs(req.company.id, body);
+  const id = uid();
+  const ts = now();
+  const task = tx(() => {
+    const number = nextTaskNumber(db, req.company.id);
+    const maxPos = one('SELECT coalesce(max(position), 0) AS m FROM tasks WHERE company_id = ? AND status = ?', req.company.id, body.status).m;
+    db.prepare(`INSERT INTO tasks (id, company_id, project_id, number, title_enc, description_enc, status, priority, assignee_user_id, due_date, labels_enc, checklist_enc, position, created_by, created_at, updated_at, completed_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(id, req.company.id, body.projectId ?? null, number, encrypt(body.title), encrypt(body.description ?? null), body.status, body.priority, body.assigneeUserId ?? null, body.dueDate ?? null,
+        encryptJSON(body.labels ?? []), encryptJSON(cleanChecklist(body.checklist)), maxPos + 1, req.user.id, ts, ts, body.status === 'done' ? ts : null);
+    return loadTask(req.company.id, id);
+  });
+  logActivity({ companyId: req.company.id, userId: req.user.id, action: 'created', entityType: 'task', entityId: id, summary: `${req.user.name} created task ${taskRef(req, task)} "${task.title}"` });
+  res.status(201).json(task);
+});
+
+router.get('/tasks/:id', (req, res) => {
+  const task = loadTask(req.company.id, req.params.id);
+  if (!task) throw notFound('Task');
+  const comments = all('SELECT * FROM task_comments WHERE task_id = ? ORDER BY created_at ASC', task.id).map(commentRow);
+  res.json({ ...task, comments });
+});
+
+router.patch('/tasks/:id', (req, res) => {
+  const current = loadTask(req.company.id, req.params.id);
+  if (!current) throw notFound('Task');
+  const body = validate(schema, req.body, { partial: true });
+  checkRefs(req.company.id, body);
+  const next = { ...current, ...body };
+  if ('checklist' in body) next.checklist = cleanChecklist(body.checklist);
+  const ts = now();
+  tx(() => {
+    let position = current.position;
+    if (body.status && body.status !== current.status) {
+      position = one('SELECT coalesce(max(position), 0) AS m FROM tasks WHERE company_id = ? AND status = ?', req.company.id, body.status).m + 1;
+    }
+    const completedAt = next.status === 'done' ? (current.completedAt || ts) : null;
+    db.prepare(`UPDATE tasks SET project_id = ?, title_enc = ?, description_enc = ?, status = ?, priority = ?, assignee_user_id = ?, due_date = ?, labels_enc = ?, checklist_enc = ?, position = ?, updated_at = ?, completed_at = ? WHERE id = ?`)
+      .run(next.projectId ?? null, encrypt(next.title), encrypt(next.description ?? null), next.status, next.priority, next.assigneeUserId ?? null, next.dueDate ?? null,
+        encryptJSON(next.labels ?? []), encryptJSON(next.checklist ?? []), position, ts, completedAt, current.id);
+  });
+  const changed = Object.keys(body);
+  let verb = `updated task ${taskRef(req, current)}`;
+  if (changed.length === 1 && body.status) verb = `moved ${taskRef(req, current)} to ${STATUS_LABEL[body.status]}`;
+  else if (changed.length === 1 && 'assigneeUserId' in body) {
+    const who = body.assigneeUserId ? one('SELECT name FROM users WHERE id = ?', body.assigneeUserId)?.name : null;
+    verb = who ? `assigned ${taskRef(req, current)} to ${who}` : `unassigned ${taskRef(req, current)}`;
+  } else if (changed.length === 1 && 'checklist' in body) verb = `updated the checklist on ${taskRef(req, current)}`;
+  logActivity({ companyId: req.company.id, userId: req.user.id, action: body.status && changed.length === 1 ? 'moved' : 'updated', entityType: 'task', entityId: current.id, summary: `${req.user.name} ${verb}`, meta: { changed } });
+  res.json(loadTask(req.company.id, current.id));
+});
+
+// Move to a column at a given index; the whole target column is re-sequenced.
+router.post('/tasks/:id/move', (req, res) => {
+  const current = loadTask(req.company.id, req.params.id);
+  if (!current) throw notFound('Task');
+  const body = validate({ status: rules.enum(STATUSES, { required: true }), index: rules.int({ required: true, min: 0, max: 100000 }) }, req.body);
+  const ts = now();
+  tx(() => {
+    const column = all('SELECT id FROM tasks WHERE company_id = ? AND status = ? AND id != ? ORDER BY position, created_at', req.company.id, body.status, current.id).map((r) => r.id);
+    const idx = Math.min(body.index, column.length);
+    column.splice(idx, 0, current.id);
+    const upd = db.prepare('UPDATE tasks SET position = ? WHERE id = ?');
+    column.forEach((id, i) => upd.run(i + 1, id));
+    const completedAt = body.status === 'done' ? (current.completedAt || ts) : null;
+    db.prepare('UPDATE tasks SET status = ?, updated_at = ?, completed_at = ? WHERE id = ?').run(body.status, ts, completedAt, current.id);
+  });
+  if (body.status !== current.status) {
+    logActivity({ companyId: req.company.id, userId: req.user.id, action: 'moved', entityType: 'task', entityId: current.id, summary: `${req.user.name} moved ${taskRef(req, current)} to ${STATUS_LABEL[body.status]}` });
+  }
+  res.json(loadTask(req.company.id, current.id));
+});
+
+router.delete('/tasks/:id', (req, res) => {
+  const current = loadTask(req.company.id, req.params.id);
+  if (!current) throw notFound('Task');
+  if (!hasRole(req, 'admin') && current.createdBy !== req.user.id) throw forbidden('Only the creator or an admin can delete a task');
+  db.prepare('DELETE FROM tasks WHERE id = ?').run(current.id);
+  logActivity({ companyId: req.company.id, userId: req.user.id, action: 'deleted', entityType: 'task', entityId: current.id, summary: `${req.user.name} deleted task ${taskRef(req, current)} "${current.title}"` });
+  res.json({ ok: true });
+});
+
+// ---------- comments ----------
+router.post('/tasks/:id/comments', (req, res) => {
+  const task = loadTask(req.company.id, req.params.id);
+  if (!task) throw notFound('Task');
+  const body = validate({ body: rules.string({ required: true, min: 1, max: 5000 }) }, req.body);
+  const id = uid();
+  db.prepare('INSERT INTO task_comments (id, company_id, task_id, user_id, body_enc, created_at) VALUES (?, ?, ?, ?, ?, ?)').run(id, req.company.id, task.id, req.user.id, encrypt(body.body), now());
+  logActivity({ companyId: req.company.id, userId: req.user.id, action: 'commented', entityType: 'task', entityId: task.id, summary: `${req.user.name} commented on ${taskRef(req, task)}` });
+  res.status(201).json(commentRow(one('SELECT * FROM task_comments WHERE id = ?', id)));
+});
+
+router.patch('/tasks/:id/comments/:cid', (req, res) => {
+  const c = one('SELECT * FROM task_comments WHERE id = ? AND task_id = ? AND company_id = ?', req.params.cid, req.params.id, req.company.id);
+  if (!c) throw notFound('Comment');
+  if (c.user_id !== req.user.id && !hasRole(req, 'admin')) throw forbidden();
+  const body = validate({ body: rules.string({ required: true, min: 1, max: 5000 }) }, req.body);
+  db.prepare('UPDATE task_comments SET body_enc = ?, updated_at = ? WHERE id = ?').run(encrypt(body.body), now(), c.id);
+  res.json(commentRow(one('SELECT * FROM task_comments WHERE id = ?', c.id)));
+});
+
+router.delete('/tasks/:id/comments/:cid', (req, res) => {
+  const c = one('SELECT * FROM task_comments WHERE id = ? AND task_id = ? AND company_id = ?', req.params.cid, req.params.id, req.company.id);
+  if (!c) throw notFound('Comment');
+  if (c.user_id !== req.user.id && !hasRole(req, 'admin')) throw forbidden();
+  db.prepare('DELETE FROM task_comments WHERE id = ?').run(c.id);
+  res.json({ ok: true });
+});
+
+export default router;
