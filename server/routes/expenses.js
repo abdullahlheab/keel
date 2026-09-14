@@ -49,6 +49,7 @@ function canEdit(req, expense) {
 
 function applyFilters(items, q) {
   let out = items;
+  if (q.ids) { const wanted = new Set(String(q.ids).split(',')); out = out.filter((e) => wanted.has(e.id)); }
   if (q.project === 'none') out = out.filter((e) => !e.projectId);
   else if (q.project) out = out.filter((e) => e.projectId === q.project);
   if (q.category === 'none') out = out.filter((e) => !e.categoryId);
@@ -209,6 +210,53 @@ router.post('/expenses', (req, res) => {
   const projectName = body.projectId ? listProjects(req.company.id).find((p) => p.id === body.projectId)?.name : null;
   logActivity({ companyId: req.company.id, userId: req.user.id, action: 'created', entityType: 'expense', entityId: id, summary: `${req.user.name} added a ${fmtMoney(body.amount, currency)} expense${body.vendor ? ` at ${body.vendor}` : ''}${projectName ? ` to ${projectName}` : ''}` });
   res.status(201).json({ ...expenseRow(one('SELECT * FROM expenses WHERE id = ?', id)), receipts: [] });
+});
+
+// ---------- bulk actions on a selection ----------
+router.post('/expenses/bulk', (req, res) => {
+  const body = validate({ ids: rules.array(rules.id(), { required: true, max: 500 }), action: rules.enum(['update', 'delete'], { required: true }) }, req.body);
+  const ids = [...new Set(body.ids)];
+  if (!ids.length) throw new HttpError(400, 'Select at least one expense');
+  const data = req.body.data && typeof req.body.data === 'object' && !Array.isArray(req.body.data) ? req.body.data : {};
+  const placeholders = ids.map(() => '?').join(',');
+  const found = new Map(all(`SELECT * FROM expenses WHERE company_id = ? AND id IN (${placeholders})`, req.company.id, ...ids).map((r) => [r.id, expenseRow(r)]));
+  if (found.size !== ids.length) throw notFound('One or more expenses');
+  const rows = ids.map((id) => found.get(id));
+  if (rows.some((e) => !canEdit(req, e))) throw forbidden('You can only change expenses you added or paid for');
+  const ts = now();
+  const n = rows.length;
+  const total = fmtMoney(rows.reduce((s, e) => s + (e.amountCents || 0), 0), req.company.currency);
+  const noun = `${n} expense${n === 1 ? '' : 's'} (${total})`;
+  const log = (action, summary) => logActivity({ companyId: req.company.id, userId: req.user.id, action, entityType: 'expense', entityId: n === 1 ? rows[0].id : null, summary: `${req.user.name} ${summary}`, meta: { ids } });
+
+  if (body.action === 'delete') {
+    const files = all(`SELECT stored_name FROM receipts WHERE expense_id IN (${placeholders})`, ...ids);
+    tx(() => { const del = db.prepare('DELETE FROM expenses WHERE id = ?'); for (const e of rows) del.run(e.id); });
+    for (const f of files) fs.rm(path.join(config.dataDir, 'uploads', f.stored_name), { force: true }, () => {});
+    log('deleted', `deleted ${noun}`);
+    return res.json({ deleted: n });
+  }
+
+  const patch = validate({ status: rules.enum(STATUSES), categoryId: rules.id(), projectId: rules.id(), paidByUserId: rules.id(), paymentMethod: rules.enum(METHODS), recurring: rules.enum(RECURRING), date: rules.date() }, data, { partial: true });
+  if (!Object.keys(patch).length) throw new HttpError(400, 'Nothing to change');
+  checkRefs(req.company.id, patch);
+  tx(() => {
+    const upd = db.prepare('UPDATE expenses SET status = ?, category_id = ?, project_id = ?, paid_by_user_id = ?, payment_method = ?, recurring = ?, date = ?, updated_at = ? WHERE id = ?');
+    for (const e of rows) {
+      upd.run(patch.status ?? e.status, 'categoryId' in patch ? patch.categoryId : e.categoryId, 'projectId' in patch ? patch.projectId : e.projectId,
+        'paidByUserId' in patch ? patch.paidByUserId : e.paidByUserId, 'paymentMethod' in patch ? patch.paymentMethod : e.paymentMethod,
+        'recurring' in patch ? patch.recurring : e.recurring, patch.date ?? e.date, ts, e.id);
+    }
+  });
+  let summary = `updated ${noun}`;
+  if (patch.status) summary = `marked ${noun} as ${patch.status}`;
+  else if ('categoryId' in patch) summary = patch.categoryId ? `categorised ${noun} as ${one('SELECT name FROM categories WHERE id = ?', patch.categoryId)?.name || ''}` : `removed the category from ${noun}`;
+  else if ('projectId' in patch) summary = patch.projectId ? `moved ${noun} to project "${listProjects(req.company.id).find((p) => p.id === patch.projectId)?.name || ''}"` : `removed ${noun} from their project`;
+  else if ('paidByUserId' in patch) summary = patch.paidByUserId ? `set ${noun} as paid by ${one('SELECT name FROM users WHERE id = ?', patch.paidByUserId)?.name || 'a member'}` : `set ${noun} as paid from the company account`;
+  else if ('recurring' in patch) summary = patch.recurring ? `tagged ${noun} as recurring ${patch.recurring}` : `untagged ${noun} as recurring`;
+  log('updated', summary);
+  const receipts = receiptsFor(ids);
+  res.json({ items: ids.map((id) => ({ ...expenseRow(one('SELECT * FROM expenses WHERE id = ?', id)), receipts: receipts.get(id) || [] })) });
 });
 
 router.get('/expenses/:id', (req, res) => {

@@ -8,7 +8,7 @@ import { toast } from '../components/toast.js';
 import { columnChart, barList, meter, statTile } from '../components/charts.js';
 import { openProjectModal } from './projects.js';
 import { openExpenseModal, expenseTable } from './expenses.js';
-import { openTaskModal, taskRow } from './board.js';
+import { openTaskModal, taskTable } from './board.js';
 import { navigate, setQuery } from '../router.js';
 import { activityList } from './activity.js';
 
@@ -56,10 +56,9 @@ export async function render(view, ctx) {
   if (tab === 'tasks') {
     const open = data.tasks.filter((t) => t.status !== 'done');
     const done = data.tasks.filter((t) => t.status === 'done');
-    body = data.tasks.length ? h('div', { class: 'stack' },
-      h('div', { class: 'card' }, h('div', { class: 'card-head' }, h('h3', {}, `Open (${open.length})`), h('a', { href: `/board?project=${p.id}`, class: 'small' }, 'Open on board')),
-        h('div', { class: 'table-wrap' }, open.length ? taskTable(open, refresh) : h('p', { class: 'card-body muted small' }, 'Nothing open.'))),
-      done.length ? h('div', { class: 'card' }, h('div', { class: 'card-head' }, h('h3', {}, `Done (${done.length})`)), h('div', { class: 'table-wrap' }, taskTable(done, refresh))) : null)
+    body = data.tasks.length ? h('div', { class: 'card' },
+      h('div', { class: 'card-head' }, h('h3', {}, `${open.length} open · ${done.length} done`), h('span', { class: 'flex', style: { gap: '12px' } }, h('span', { class: 'small muted hide-mobile' }, 'Ctrl+click or right-click for bulk actions'), h('a', { href: `/board?project=${p.id}`, class: 'small' }, 'Open on board'))),
+      h('div', { class: 'table-wrap' }, taskTable(data.tasks, { refresh })))
       : emptyState({ icon: 'checkSquare', title: 'No tasks in this project', text: 'Add the first task to start planning.', action: button('New task', { variant: 'primary', icon: 'plus', onclick: () => openTaskModal({ defaults: { projectId: p.id }, onSaved: refresh }) }) });
   } else if (tab === 'expenses') {
     body = data.expenses.length ? h('div', { class: 'card' }, h('div', { class: 'table-wrap' }, expenseTable(data.expenses, { onChanged: refresh, hideProject: true }))) : emptyState({ icon: 'receipt', title: 'No expenses yet', text: 'Costs logged against this project appear here.', action: button('Add expense', { variant: 'primary', icon: 'plus', onclick: () => openExpenseModal({ defaults: { projectId: p.id }, onSaved: refresh }) }) });
@@ -101,8 +100,3 @@ function fillMonths(byMonth) {
   return out;
 }
 
-function taskTable(tasks, refresh) {
-  return h('table', { class: 'table' },
-    h('thead', {}, h('tr', {}, h('th', {}, 'Task'), h('th', {}, 'Status'), h('th', {}, 'Priority'), h('th', {}, 'Assignee'), h('th', {}, 'Due'))),
-    h('tbody', {}, tasks.map((t) => taskRow(t, { onOpen: () => openTaskModal({ taskId: t.id, onSaved: refresh }) }))));
-}

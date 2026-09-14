@@ -1,4 +1,4 @@
-// Kanban board, list view, and the task editor.
+// Kanban board, list view, Explorer-style multi-select with context menu, and the task editor.
 import { h, mount, date, todayIso, daysUntil, relative, debounce, STATUS, TASK_STATUSES, dateTime } from '../dom.js';
 import { api } from '../api.js';
 import { state, member, isAdmin } from '../state.js';
@@ -7,6 +7,7 @@ import { openModal, confirmDialog } from '../components/modal.js';
 import { field, input, textarea, select, handleSubmit, formActions, row } from '../components/forms.js';
 import { toast } from '../components/toast.js';
 import { enableColumnDnd } from '../components/dnd.js';
+import { createSelection, contextMenu, selectionBar, removeSelectionBar, selectBox } from '../components/selection.js';
 import { setQuery } from '../router.js';
 
 const PRIORITIES = [['urgent', 'Urgent'], ['high', 'High'], ['medium', 'Medium'], ['low', 'Low']].map(([value, label]) => ({ value, label }));
@@ -27,15 +28,18 @@ function applyFilters(items, q) {
 }
 
 let openedFromQuery = null;
+let keepSelection = []; // ids re-selected after a refresh, Explorer style
 
 export async function render(view, ctx) {
   const q = ctx.query;
-  if (!view.querySelector('.kanban')) mount(view, spinner());
+  if (ctx.fresh) { keepSelection = []; removeSelectionBar(); }
+  if (!view.querySelector('.kanban') && !view.querySelector('.task-table')) mount(view, spinner());
   const res = await api.get('/api/tasks');
   const all = res.items;
   const items = applyFilters(all, q);
   const listMode = q.view === 'list';
   const labels = [...new Set(all.flatMap((t) => t.labels))].sort();
+  const tasksById = new Map(all.map((t) => [t.id, t]));
 
   const filters = h('div', { class: 'filters' },
     h('div', { class: 'search' }, icon('search', { size: 15 }), input({ placeholder: 'Search tasks', value: q.q || '', oninput: debounce((e) => setQuery({ q: e.target.value }), 250) })),
@@ -52,11 +56,14 @@ export async function render(view, ctx) {
   const open = all.filter((t) => t.status !== 'done').length;
   const header = pageHeader({
     title: 'Task board',
-    subtitle: `${open} open · ${all.length - open} done · ${all.filter((t) => t.status !== 'done' && t.dueDate && t.dueDate < todayIso()).length} overdue`,
+    subtitle: `${open} open · ${all.length - open} done · ${all.filter((t) => t.status !== 'done' && t.dueDate && t.dueDate < todayIso()).length} overdue · Ctrl+click or right-click to work on several at once`,
     actions: [button('New task', { variant: 'primary', icon: 'plus', onclick: () => openTaskModal({ defaults: { projectId: q.project && q.project !== 'none' ? q.project : null }, onSaved: ctx.refresh }) })],
   });
 
-  const body = listMode ? renderList(items, ctx) : renderBoard(items, ctx, all.length === 0);
+  const shared = { ctx, tasksById, labels };
+  const body = listMode
+    ? (items.length ? h('div', { class: 'card' }, h('div', { class: 'table-wrap' }, buildTaskTable(sortForList(items), shared))) : emptyState({ icon: 'list', title: 'No tasks match', text: 'Try clearing a filter.' }))
+    : renderBoard(items, shared, all.length === 0);
   mount(view, header, filters, body);
 
   if (q.task && openedFromQuery !== q.task) {
@@ -65,12 +72,165 @@ export async function render(view, ctx) {
   }
 }
 
-function renderBoard(items, ctx, nothingAtAll) {
+function sortForList(items) {
+  return [...items].sort((a, b) => TASK_STATUSES.indexOf(a.status) - TASK_STATUSES.indexOf(b.status) || PRIO_RANK[a.priority] - PRIO_RANK[b.priority] || (a.dueDate || '9').localeCompare(b.dueDate || '9'));
+}
+
+// ---------- selection + bulk actions ----------
+function wireSelection(root, itemSelector, { ctx, tasksById, labels }) {
+  const sel = createSelection({
+    root,
+    itemSelector,
+    initial: keepSelection,
+    onChange: (s) => {
+      keepSelection = s.list();
+      const ids = s.list();
+      selectionBar({
+        count: ids.length,
+        label: ids.length === 1 ? 'task selected' : 'tasks selected',
+        onClear: () => s.clear(),
+        actions: ids.length ? [
+          { label: 'Move', icon: 'board', children: statusItems(ids, ctx, tasksById) },
+          { label: 'Assign', icon: 'users', children: assigneeItems(ids, ctx, tasksById) },
+          { label: 'Priority', icon: 'trendUp', children: priorityItems(ids, ctx, tasksById) },
+          { label: 'More', icon: 'more', children: [
+            { label: 'Project', icon: 'folder', children: projectItems(ids, ctx, tasksById) },
+            { label: 'Due date', icon: 'calendar', children: dueItems(ids, ctx) },
+            { label: 'Labels', icon: 'tag', children: labelItems(ids, ctx, tasksById, labels) },
+            { divider: true },
+            { label: 'Duplicate', icon: 'copy', onclick: bulk(ids, ctx, 'duplicate', undefined, `Duplicated ${ids.length} task${ids.length === 1 ? '' : 's'}`) },
+            { label: 'Copy as text', icon: 'copy', onclick: () => copyAsText(ids, tasksById) },
+          ] },
+          { label: 'Delete', icon: 'trash', danger: true, onclick: () => deleteTasks(ids, ctx) },
+        ] : [],
+      });
+    },
+    onOpen: (id) => openTaskModal({ taskId: id, onSaved: ctx.refresh }),
+    onContext: (e, ids) => contextMenu(e.clientX, e.clientY, taskMenuItems(ids, ctx, tasksById, labels)),
+    onDelete: (ids) => deleteTasks(ids, ctx),
+  });
+  return sel;
+}
+
+function bulk(ids, ctx, action, data, message) {
+  return async () => {
+    try {
+      const r = await api.post('/api/tasks/bulk', { ids, action, data });
+      toast(message || (r.deleted ? `Deleted ${r.deleted}` : `Updated ${ids.length} task${ids.length === 1 ? '' : 's'}`), { duration: 2000 });
+    } catch (err) {
+      toast(err.message, { type: 'error' });
+    }
+    ctx.refresh();
+  };
+}
+
+function sameValue(ids, tasksById, key) {
+  const values = new Set(ids.map((id) => tasksById.get(id)?.[key] ?? null));
+  return values.size === 1 ? [...values][0] : undefined;
+}
+
+function statusItems(ids, ctx, tasksById) {
+  const current = sameValue(ids, tasksById, 'status');
+  return TASK_STATUSES.map((s) => ({ label: STATUS.task[s].label, swatch: current === s ? null : STATUS.task[s].color, checked: current === s, onclick: bulk(ids, ctx, 'update', { status: s }, `Moved to ${STATUS.task[s].label}`) }));
+}
+function priorityItems(ids, ctx, tasksById) {
+  const current = sameValue(ids, tasksById, 'priority');
+  return PRIORITIES.map((p) => ({ label: p.label, checked: current === p.value, onclick: bulk(ids, ctx, 'update', { priority: p.value }, `Priority set to ${p.label.toLowerCase()}`) }));
+}
+function assigneeItems(ids, ctx, tasksById) {
+  const current = sameValue(ids, tasksById, 'assigneeUserId');
+  return [
+    ...state.members.map((m) => ({ label: m.name, checked: current === m.id, onclick: bulk(ids, ctx, 'update', { assigneeUserId: m.id }, `Assigned to ${m.name}`) })),
+    { divider: true },
+    { label: 'Unassigned', checked: current === null, onclick: bulk(ids, ctx, 'update', { assigneeUserId: null }, 'Unassigned') },
+  ];
+}
+function projectItems(ids, ctx, tasksById) {
+  const current = sameValue(ids, tasksById, 'projectId');
+  return [
+    ...state.projects.filter((p) => p.status !== 'archived').map((p) => ({ label: p.name, swatch: current === p.id ? null : p.color, checked: current === p.id, onclick: bulk(ids, ctx, 'update', { projectId: p.id }, `Moved to ${p.name}`) })),
+    { divider: true },
+    { label: 'No project', checked: current === null, onclick: bulk(ids, ctx, 'update', { projectId: null }, 'Removed from project') },
+  ];
+}
+function dueItems(ids, ctx) {
+  const plus = (days) => { const d = new Date(); d.setDate(d.getDate() + days); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+  const nextMonday = () => { const d = new Date(); const delta = ((8 - d.getDay()) % 7) || 7; return plus(delta); };
+  return [
+    { label: 'Today', onclick: bulk(ids, ctx, 'update', { dueDate: plus(0) }, 'Due today') },
+    { label: 'Tomorrow', onclick: bulk(ids, ctx, 'update', { dueDate: plus(1) }, 'Due tomorrow') },
+    { label: 'Next Monday', onclick: bulk(ids, ctx, 'update', { dueDate: nextMonday() }, 'Due next Monday') },
+    { label: 'In a week', onclick: bulk(ids, ctx, 'update', { dueDate: plus(7) }, 'Due in a week') },
+    { label: 'Pick a date…', icon: 'calendar', onclick: async () => { const v = await promptValue({ title: 'Set due date', label: 'Due date', type: 'date' }); if (v) bulk(ids, ctx, 'update', { dueDate: v }, `Due ${date(v)}`)(); } },
+    { divider: true },
+    { label: 'Clear due date', onclick: bulk(ids, ctx, 'update', { dueDate: null }, 'Due date cleared') },
+  ];
+}
+function labelItems(ids, ctx, tasksById, labels) {
+  return [
+    ...labels.map((l) => {
+      const allHave = ids.every((id) => tasksById.get(id)?.labels.includes(l));
+      return { label: l, checked: allHave, onclick: bulk(ids, ctx, allHave ? 'remove_label' : 'add_label', { label: l }, allHave ? `Removed "${l}"` : `Added "${l}"`) };
+    }),
+    labels.length ? { divider: true } : null,
+    { label: 'New label…', icon: 'plus', onclick: async () => { const v = await promptValue({ title: 'Add a label', label: 'Label', placeholder: 'e.g. sprint-3', maxlength: 30 }); if (v) bulk(ids, ctx, 'add_label', { label: v }, `Added "${v}"`)(); } },
+  ];
+}
+
+function taskMenuItems(ids, ctx, tasksById, labels) {
+  const n = ids.length;
+  const single = n === 1 ? tasksById.get(ids[0]) : null;
+  return [
+    single ? { label: 'Open', icon: 'external', shortcut: 'Enter', onclick: () => openTaskModal({ taskId: single.id, onSaved: ctx.refresh }) } : { header: `${n} tasks selected` },
+    { divider: true },
+    { label: 'Move to', icon: 'board', children: statusItems(ids, ctx, tasksById) },
+    { label: 'Priority', icon: 'trendUp', children: priorityItems(ids, ctx, tasksById) },
+    { label: 'Assign to', icon: 'users', children: assigneeItems(ids, ctx, tasksById) },
+    { label: 'Project', icon: 'folder', children: projectItems(ids, ctx, tasksById) },
+    { label: 'Due date', icon: 'calendar', children: dueItems(ids, ctx) },
+    { label: 'Labels', icon: 'tag', children: labelItems(ids, ctx, tasksById, labels) },
+    { divider: true },
+    { label: n === 1 ? 'Duplicate' : `Duplicate ${n} tasks`, icon: 'copy', onclick: bulk(ids, ctx, 'duplicate', undefined, `Duplicated ${n} task${n === 1 ? '' : 's'}`) },
+    { label: 'Copy as text', icon: 'copy', onclick: () => copyAsText(ids, tasksById) },
+    single ? { label: 'Copy link', icon: 'external', onclick: async () => { try { await navigator.clipboard.writeText(`${location.origin}/board?task=${single.id}`); toast('Link copied'); } catch { toast('Could not copy', { type: 'error' }); } } } : null,
+    { divider: true },
+    { label: n === 1 ? 'Delete' : `Delete ${n} tasks`, icon: 'trash', danger: true, shortcut: 'Del', onclick: () => deleteTasks(ids, ctx) },
+  ];
+}
+
+async function copyAsText(ids, tasksById) {
+  const text = ids.map((id) => tasksById.get(id)).filter(Boolean).map((t) => `${state.company.key}-${t.number} ${t.title}${t.status === 'done' ? ' (done)' : ''}`).join('\n');
+  try { await navigator.clipboard.writeText(text); toast(`Copied ${ids.length} task${ids.length === 1 ? '' : 's'} as text`); } catch { toast('Could not copy', { type: 'error' }); }
+}
+
+async function deleteTasks(ids, ctx) {
+  const n = ids.length;
+  const ok = await confirmDialog({ title: n === 1 ? 'Delete this task?' : `Delete ${n} tasks?`, message: 'Comments and checklists go with them. This cannot be undone.', confirmText: n === 1 ? 'Delete' : `Delete ${n}`, danger: true });
+  if (!ok) return;
+  keepSelection = [];
+  await bulk(ids, ctx, 'delete', undefined, n === 1 ? 'Task deleted' : `Deleted ${n} tasks`)();
+}
+
+function promptValue({ title, label, type = 'text', placeholder, maxlength }) {
+  return new Promise((resolve) => {
+    let value = null;
+    const form = h('form', { class: 'form-grid', novalidate: true },
+      field({ label, name: 'value', input: input({ type, placeholder, maxlength, required: true, autofocus: true }) }),
+      formActions(h('button', { class: 'btn', type: 'button', onclick: () => m.close() }, 'Cancel'), h('button', { class: 'btn btn-primary', type: 'submit' }, 'Apply')));
+    handleSubmit(form, async (data) => { value = (data.value || '').trim() || null; m.close(); });
+    const m = openModal({ title, content: form, size: 'sm', onClose: () => resolve(value) });
+  });
+}
+
+// ---------- board ----------
+function renderBoard(items, shared, nothingAtAll) {
+  const { ctx } = shared;
   if (nothingAtAll) {
     return emptyState({ icon: 'board', title: 'Your board is empty', text: 'Tasks move across Backlog, To do, In progress, In review and Done. Drag cards between columns.', action: button('Create the first task', { variant: 'primary', icon: 'plus', onclick: () => openTaskModal({ onSaved: ctx.refresh }) }) });
   }
   const board = h('div', { class: 'kanban' });
   const cutoff = new Date(Date.now() - 14 * 86400000).toISOString();
+  const projectDefault = ctx.query.project && ctx.query.project !== 'none' ? ctx.query.project : null;
   for (const status of TASK_STATUSES) {
     let colTasks = items.filter((t) => t.status === status).sort((a, b) => a.position - b.position);
     let hidden = [];
@@ -79,20 +239,54 @@ function renderBoard(items, ctx, nothingAtAll) {
       colTasks = colTasks.filter((t) => !hidden.includes(t));
     }
     const bodyEl = h('div', { class: 'kcol-body', dataset: { status } }, colTasks.map((t) => card(t, ctx)));
-    if (hidden.length) bodyEl.appendChild(h('button', { class: 'kcol-more', type: 'button', onclick: (e) => { e.target.replaceWith(...hidden.map((t) => card(t, ctx))); } }, `Show ${hidden.length} older`));
+    if (hidden.length) bodyEl.appendChild(h('button', { class: 'kcol-more', type: 'button', onclick: (e) => { e.target.replaceWith(...hidden.map((t) => card(t, ctx))); sel.paint(); } }, `Show ${hidden.length} older`));
     const dot = h('span', { class: 'dot' }); dot.style.background = STATUS.task[status].color;
     board.appendChild(h('div', { class: 'kcol', dataset: { status } },
-      h('div', { class: 'kcol-head' }, dot, STATUS.task[status].label, h('span', { class: 'count' }, colTasks.length + hidden.length), iconButton('plus', { title: `Add to ${STATUS.task[status].label}`, onclick: () => openTaskModal({ defaults: { status, projectId: ctx.query.project && ctx.query.project !== 'none' ? ctx.query.project : null }, onSaved: ctx.refresh }) })),
+      h('div', { class: 'kcol-head' }, dot, STATUS.task[status].label, h('span', { class: 'count' }, colTasks.length + hidden.length), iconButton('plus', { title: `Add to ${STATUS.task[status].label}`, onclick: () => openTaskModal({ defaults: { status, projectId: projectDefault }, onSaved: ctx.refresh }) })),
       bodyEl));
   }
+
+  const sel = wireSelection(board, '.kcard', shared);
+
+  // right-click on empty column space
+  board.addEventListener('contextmenu', (e) => {
+    if (e.target.closest('.kcard')) return;
+    const col = e.target.closest('.kcol');
+    if (!col) return;
+    e.preventDefault();
+    const status = col.dataset.status;
+    const inColumn = [...col.querySelectorAll('.kcard')].map((c) => c.dataset.id);
+    contextMenu(e.clientX, e.clientY, [
+      { label: `New task in ${STATUS.task[status].label}`, icon: 'plus', onclick: () => openTaskModal({ defaults: { status, projectId: projectDefault }, onSaved: ctx.refresh }) },
+      { label: `Select all in ${STATUS.task[status].label}`, icon: 'checkSquare', disabled: !inColumn.length, onclick: () => sel.set(inColumn) },
+      sel.count ? { divider: true } : null,
+      sel.count ? { label: `Move ${sel.count} selected here`, icon: 'board', onclick: bulk(sel.list(), ctx, 'update', { status }, `Moved to ${STATUS.task[status].label}`) } : null,
+    ]);
+  });
+
+  // dragging a selected card carries the whole selection
+  board.addEventListener('dragstart', (e) => {
+    const cardEl = e.target.closest('.kcard');
+    if (cardEl && sel.has(cardEl.dataset.id) && sel.count > 1) cardEl.dataset.dragCount = sel.count;
+  });
+  board.addEventListener('dragend', (e) => { const cardEl = e.target.closest('.kcard'); if (cardEl) delete cardEl.dataset.dragCount; });
+
   enableColumnDnd(board, {
     onDrop: async ({ id, status, index, fromStatus }) => {
+      const multi = sel.has(id) && sel.count > 1;
       const cardEl = board.querySelector(`.kcard[data-id="${id}"]`);
       if (cardEl) { cardEl.dataset.status = status; cardEl.classList.toggle('done', status === 'done'); }
       updateCounts(board);
       try {
-        await api.post(`/api/tasks/${id}/move`, { status, index });
-        if (fromStatus !== status) toast(`Moved to ${STATUS.task[status].label}`, { duration: 1500 });
+        if (multi) {
+          const ids = [id, ...sel.list().filter((x) => x !== id)];
+          await api.post('/api/tasks/bulk', { ids, action: 'move', data: { status, index } });
+          toast(`Moved ${ids.length} tasks to ${STATUS.task[status].label}`, { duration: 1800 });
+          ctx.refresh();
+        } else {
+          await api.post(`/api/tasks/${id}/move`, { status, index });
+          if (fromStatus !== status) toast(`Moved to ${STATUS.task[status].label}`, { duration: 1500 });
+        }
       } catch (err) {
         toast(err.message, { type: 'error' });
         ctx.refresh();
@@ -111,7 +305,8 @@ function card(t, ctx) {
   const assignee = member(t.assigneeUserId);
   const due = t.dueDate ? daysUntil(t.dueDate) : null;
   const done = t.checklist.filter((c) => c.done).length;
-  const el = h('div', { class: `kcard ${t.status === 'done' ? 'done' : ''}`, draggable: true, dataset: { id: t.id, status: t.status }, onclick: () => openTaskModal({ taskId: t.id, onSaved: ctx.refresh }) },
+  return h('div', { class: `kcard ${t.status === 'done' ? 'done' : ''}`, draggable: true, dataset: { id: t.id, status: t.status }, onclick: () => openTaskModal({ taskId: t.id, onSaved: ctx.refresh }) },
+    selectBox({ title: 'Select task' }),
     h('div', { class: 'kc-top' }, h('span', { class: 'kc-ref' }, `${state.company.key}-${t.number}`), proj ? h('span', { class: 'kc-project' }, colorDot(proj.color, 7), proj.name) : null),
     h('div', { class: 'kc-title' }, t.title),
     t.labels.length ? h('div', { class: 'kc-labels' }, t.labels.slice(0, 4).map((l) => h('span', { class: 'label-chip' }, l))) : null,
@@ -121,22 +316,36 @@ function card(t, ctx) {
       t.checklist.length ? h('span', { class: 'kc-meta', title: 'Checklist' }, icon('checkSquare', { size: 12 }), `${done}/${t.checklist.length}`) : null,
       t.commentCount ? h('span', { class: 'kc-meta', title: 'Comments' }, icon('message', { size: 12 }), t.commentCount) : null,
       assignee ? avatar(assignee, { size: 'xs' }) : null));
-  return el;
 }
 
-function renderList(items, ctx) {
-  if (!items.length) return emptyState({ icon: 'list', title: 'No tasks match', text: 'Try clearing a filter.' });
-  const sorted = [...items].sort((a, b) => TASK_STATUSES.indexOf(a.status) - TASK_STATUSES.indexOf(b.status) || PRIO_RANK[a.priority] - PRIO_RANK[b.priority] || (a.dueDate || '9').localeCompare(b.dueDate || '9'));
-  return h('div', { class: 'card' }, h('div', { class: 'table-wrap' }, h('table', { class: 'table' },
-    h('thead', {}, h('tr', {}, h('th', {}, 'Task'), h('th', {}, 'Status'), h('th', {}, 'Priority'), h('th', {}, 'Assignee'), h('th', {}, 'Due'))),
-    h('tbody', {}, sorted.map((t) => taskRow(t, { onOpen: () => openTaskModal({ taskId: t.id, onSaved: ctx.refresh }) }))))));
+// ---------- list / table (also used on the project page) ----------
+export function taskTable(tasks, { refresh }) {
+  const ctx = { refresh, query: {} };
+  const tasksById = new Map(tasks.map((t) => [t.id, t]));
+  const labels = [...new Set(tasks.flatMap((t) => t.labels))].sort();
+  return buildTaskTable(sortForList(tasks), { ctx, tasksById, labels });
+}
+
+function buildTaskTable(tasks, shared) {
+  const { ctx } = shared;
+  const headBox = h('span', { class: 'sel-box', role: 'checkbox', title: 'Select all', 'aria-label': 'Select all', 'data-no-select': '' });
+  const table = h('table', { class: 'table task-table' },
+    h('thead', {}, h('tr', {}, h('th', { class: 'sel-cell' }, headBox), h('th', {}, 'Task'), h('th', {}, 'Status'), h('th', {}, 'Priority'), h('th', {}, 'Assignee'), h('th', {}, 'Due'))),
+    h('tbody', {}, tasks.map((t) => taskRow(t, { onOpen: () => openTaskModal({ taskId: t.id, onSaved: ctx.refresh }) }))));
+  const sel = wireSelection(table, 'tbody tr[data-id]', shared);
+  const paintHead = () => headBox.classList.toggle('on', sel.count > 0 && sel.count === tasks.length);
+  headBox.addEventListener('click', (e) => { e.stopPropagation(); sel.toggleAll(); paintHead(); });
+  table.addEventListener('click', paintHead, true);
+  paintHead();
+  return table;
 }
 
 export function taskRow(t, { onOpen }) {
   const proj = state.projects.find((p) => p.id === t.projectId);
   const assignee = member(t.assigneeUserId);
   const due = t.dueDate ? daysUntil(t.dueDate) : null;
-  return h('tr', { class: 'clickable', onclick: onOpen },
+  return h('tr', { class: 'clickable', dataset: { id: t.id }, onclick: onOpen },
+    h('td', { class: 'sel-cell' }, selectBox({ title: 'Select task' })),
     h('td', {}, h('div', { class: 'cell-main flex', style: { gap: '8px' } }, h('span', { class: 'mono small muted' }, `${state.company.key}-${t.number}`), t.title, t.labels.slice(0, 3).map((l) => h('span', { class: 'label-chip' }, l))), proj ? h('div', { class: 'cell-sub flex', style: { gap: '5px' } }, colorDot(proj.color, 7), proj.name) : null),
     h('td', {}, statusBadge('task', t.status)),
     h('td', {}, priorityBadge(t.priority)),
@@ -164,7 +373,6 @@ export async function openTaskModal({ taskId = null, defaults = {}, onSaved, onC
     } catch (err) { toast(err.message, { type: 'error' }); return false; }
   }
 
-  // --- main column
   const title = input({ class: 'input input-title', value: task.title, 'aria-label': 'Title' });
   title.addEventListener('blur', () => { const v = title.value.trim(); if (v && v !== task.title) patch({ title: v }); else title.value = task.title; });
   title.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); title.blur(); } });
@@ -220,7 +428,6 @@ export async function openTaskModal({ taskId = null, defaults = {}, onSaved, onC
   }
   renderComments();
 
-  // --- side column
   const labelsBox = h('div', { class: 'stack', style: { gap: '6px' } });
   function renderLabels() {
     const inp = input({ placeholder: 'Add label, press Enter', class: 'input' });

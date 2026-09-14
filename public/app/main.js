@@ -4,6 +4,7 @@ import { state, events, setSession, setCompanyData, loadTheme } from './state.js
 import { startRouter, navigate, currentLocation } from './router.js';
 import { renderShell, setActiveNav } from './shell.js';
 import { spinner, errorBox } from './components/ui.js';
+import { closeContextMenu, removeSelectionBar } from './components/selection.js';
 import * as auth from './views/auth.js';
 import * as dashboard from './views/dashboard.js';
 import * as projects from './views/projects.js';
@@ -80,9 +81,13 @@ async function handleRoute(loc) {
     mount(shellView, h('div', { class: 'empty' }, h('h3', {}, 'Page not found'), h('a', { href: '/' }, 'Back to dashboard')));
     return;
   }
-  window.scrollTo(0, 0);
+  closeContextMenu();
+  removeSelectionBar();
+  const fresh = shellView.dataset.view !== loc.name;
+  shellView.dataset.view = loc.name;
+  if (fresh) window.scrollTo(0, 0);
   try {
-    await view(shellView, { ...loc, refresh: () => handleRoute(currentLocation()), refreshCompany });
+    await view(shellView, { ...loc, fresh, refresh: () => handleRoute(currentLocation()), refreshCompany });
   } catch (err) {
     if (seq !== renderSeq) return;
     console.error(err);

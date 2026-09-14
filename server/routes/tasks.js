@@ -84,6 +84,101 @@ router.post('/tasks', (req, res) => {
   res.status(201).json(task);
 });
 
+// ---------- bulk actions on a selection ----------
+const BULK_ACTIONS = ['update', 'move', 'delete', 'duplicate', 'add_label', 'remove_label'];
+
+router.post('/tasks/bulk', (req, res) => {
+  const body = validate({ ids: rules.array(rules.id(), { required: true, max: 200 }), action: rules.enum(BULK_ACTIONS, { required: true }) }, req.body);
+  const ids = [...new Set(body.ids)];
+  if (!ids.length) throw new HttpError(400, 'Select at least one task');
+  const data = req.body.data && typeof req.body.data === 'object' && !Array.isArray(req.body.data) ? req.body.data : {};
+  const placeholders = ids.map(() => '?').join(',');
+  const found = new Map(all(`${TASK_SELECT} WHERE t.company_id = ? AND t.id IN (${placeholders})`, req.company.id, ...ids).map((r) => [r.id, taskRow(r)]));
+  if (found.size !== ids.length) throw notFound('One or more tasks');
+  const tasks = ids.map((id) => found.get(id));
+  const ts = now();
+  const n = tasks.length;
+  const noun = `${n} task${n === 1 ? '' : 's'}`;
+  const refs = tasks.map((t) => taskRef(req, t)).join(', ');
+  const log = (action, summary) => logActivity({ companyId: req.company.id, userId: req.user.id, action, entityType: 'task', entityId: n === 1 ? tasks[0].id : null, summary: `${req.user.name} ${summary}`, meta: { ids, refs } });
+  const reload = () => ({ items: ids.map((id) => loadTask(req.company.id, id)) });
+
+  if (body.action === 'delete') {
+    if (!hasRole(req, 'admin') && tasks.some((t) => t.createdBy !== req.user.id)) throw forbidden('You can only delete tasks you created');
+    tx(() => { const del = db.prepare('DELETE FROM tasks WHERE id = ?'); for (const t of tasks) del.run(t.id); });
+    log('deleted', `deleted ${noun} (${refs})`);
+    return res.json({ deleted: n });
+  }
+
+  if (body.action === 'duplicate') {
+    const created = tx(() => tasks.map((t) => {
+      const id = uid();
+      const number = nextTaskNumber(db, req.company.id);
+      const maxPos = one('SELECT coalesce(max(position), 0) AS m FROM tasks WHERE company_id = ? AND status = ?', req.company.id, t.status).m;
+      db.prepare(`INSERT INTO tasks (id, company_id, project_id, number, title_enc, description_enc, status, priority, assignee_user_id, due_date, labels_enc, checklist_enc, position, created_by, created_at, updated_at, completed_at)
+                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(id, req.company.id, t.projectId, number, encrypt(`${t.title} (copy)`), encrypt(t.description ?? null), t.status, t.priority, t.assigneeUserId, t.dueDate,
+          encryptJSON(t.labels), encryptJSON(t.checklist.map((c) => ({ ...c, id: uid(), done: false }))), maxPos + 1, req.user.id, ts, ts, t.status === 'done' ? ts : null);
+      return id;
+    }));
+    log('created', `duplicated ${noun} (${refs})`);
+    return res.status(201).json({ items: created.map((id) => loadTask(req.company.id, id)) });
+  }
+
+  if (body.action === 'move') {
+    const mv = validate({ status: rules.enum(STATUSES, { required: true }), index: rules.int({ required: true, min: 0, max: 100000 }) }, data);
+    tx(() => {
+      const moving = new Set(ids);
+      const column = all('SELECT id FROM tasks WHERE company_id = ? AND status = ? ORDER BY position, created_at', req.company.id, mv.status).map((r) => r.id).filter((id) => !moving.has(id));
+      column.splice(Math.min(mv.index, column.length), 0, ...ids);
+      const pos = db.prepare('UPDATE tasks SET position = ? WHERE id = ?');
+      column.forEach((id, i) => pos.run(i + 1, id));
+      const st = db.prepare('UPDATE tasks SET status = ?, updated_at = ?, completed_at = ? WHERE id = ?');
+      for (const t of tasks) st.run(mv.status, ts, mv.status === 'done' ? (t.completedAt || ts) : null, t.id);
+    });
+    if (tasks.some((t) => t.status !== mv.status)) log('moved', `moved ${noun} to ${STATUS_LABEL[mv.status]}`);
+    return res.json(reload());
+  }
+
+  if (body.action === 'add_label' || body.action === 'remove_label') {
+    const { label } = validate({ label: rules.string({ required: true, min: 1, max: 30 }) }, data);
+    const adding = body.action === 'add_label';
+    tx(() => {
+      const upd = db.prepare('UPDATE tasks SET labels_enc = ?, updated_at = ? WHERE id = ?');
+      for (const t of tasks) {
+        const labels = adding ? [...new Set([...t.labels, label])].slice(0, 10) : t.labels.filter((l) => l !== label);
+        upd.run(encryptJSON(labels), ts, t.id);
+      }
+    });
+    log('updated', adding ? `added the label "${label}" to ${noun}` : `removed the label "${label}" from ${noun}`);
+    return res.json(reload());
+  }
+
+  // update: the same field on every selected task
+  const patch = validate({ status: rules.enum(STATUSES), priority: rules.enum(PRIORITIES), assigneeUserId: rules.id(), projectId: rules.id(), dueDate: rules.date() }, data, { partial: true });
+  if (!Object.keys(patch).length) throw new HttpError(400, 'Nothing to change');
+  checkRefs(req.company.id, patch);
+  tx(() => {
+    let nextPos = patch.status ? one('SELECT coalesce(max(position), 0) AS m FROM tasks WHERE company_id = ? AND status = ?', req.company.id, patch.status).m : 0;
+    const upd = db.prepare('UPDATE tasks SET status = ?, priority = ?, assignee_user_id = ?, project_id = ?, due_date = ?, position = ?, completed_at = ?, updated_at = ? WHERE id = ?');
+    for (const t of tasks) {
+      const status = patch.status ?? t.status;
+      let position = t.position;
+      if (patch.status && patch.status !== t.status) { nextPos += 1; position = nextPos; }
+      upd.run(status, patch.priority ?? t.priority, 'assigneeUserId' in patch ? patch.assigneeUserId : t.assigneeUserId, 'projectId' in patch ? patch.projectId : t.projectId,
+        'dueDate' in patch ? patch.dueDate : t.dueDate, position, status === 'done' ? (t.completedAt || ts) : null, ts, t.id);
+    }
+  });
+  let summary = `updated ${noun}`;
+  if (patch.status) summary = `moved ${noun} to ${STATUS_LABEL[patch.status]}`;
+  else if (patch.priority) summary = `set ${noun} to ${patch.priority} priority`;
+  else if ('assigneeUserId' in patch) summary = patch.assigneeUserId ? `assigned ${noun} to ${one('SELECT name FROM users WHERE id = ?', patch.assigneeUserId)?.name || 'a member'}` : `unassigned ${noun}`;
+  else if ('projectId' in patch) summary = patch.projectId ? `moved ${noun} to project "${listProjects(req.company.id).find((p) => p.id === patch.projectId)?.name || ''}"` : `removed ${noun} from their project`;
+  else if ('dueDate' in patch) summary = patch.dueDate ? `set the due date of ${noun} to ${patch.dueDate}` : `cleared the due date on ${noun}`;
+  log(patch.status ? 'moved' : 'updated', `${summary} (${refs})`);
+  res.json(reload());
+});
+
 router.get('/tasks/:id', (req, res) => {
   const task = loadTask(req.company.id, req.params.id);
   if (!task) throw notFound('Task');

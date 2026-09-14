@@ -15,6 +15,7 @@ Built for two founders who want one place that answers "what are we working on, 
 | **Expenses** | Amount, vendor, category, project, who paid, status (pending / paid / reimbursed), recurring tag, notes, encrypted receipt uploads, CSV export |
 | **Summary** | Totals by month / project / category / payer / vendor, budget meters, recurring monthly cost, pending reimbursements |
 | **Task board** | Backlog → To do → In progress → In review → Done, drag and drop, priorities, labels, due dates, checklists, comments, `KEY-12` task ids, list view |
+| **Multi-select** | Explorer-style: Ctrl/Shift+click or hover checkboxes, Ctrl+A, then right-click (or the floating bar) to move, assign, reprioritise, relabel, duplicate, copy or delete many tasks at once; drag a selection between columns; same for expenses (status, category, project, payer, export, delete) |
 | **Activity** | Who changed what and when, across the whole company |
 
 ## Security model
