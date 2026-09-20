@@ -13,7 +13,7 @@ const TABS = [
   { id: 'security', label: 'Security', icon: 'shield' },
   { id: 'company', label: 'Company', icon: 'settings' },
   { id: 'members', label: 'Members & invites', icon: 'users' },
-  { id: 'categories', label: 'Expense categories', icon: 'tag' },
+  { id: 'categories', label: 'Categories', icon: 'tag' },
 ];
 const ROLE_OPTIONS = [['owner', 'Owner'], ['admin', 'Admin'], ['member', 'Member']].map(([value, label]) => ({ value, label }));
 const ROLE_HELP = 'Owners can do everything, including managing other owners. Admins manage members, settings and any record. Members can add and edit their own expenses and work with tasks.';
@@ -219,31 +219,41 @@ async function renderMembers(section, ctx) {
 }
 
 // ---------- categories ----------
+// Expenses and projects each have their own set; the editor is the same for both.
 async function renderCategories(section, ctx) {
+  const [expense, project] = await Promise.all([
+    categorySection(ctx, { path: '/api/company/categories', title: 'Expense categories', blurb: 'Group spending so the summary tells you where the money goes.', placeholder: 'e.g. Payroll', detaches: 'Expenses in this category become uncategorised.' }),
+    categorySection(ctx, { path: '/api/company/project-categories', title: 'Project categories', blurb: 'Group projects by the kind of work they are, so you can filter the list and see where effort goes.', placeholder: 'e.g. Client work', detaches: 'Projects in this category become uncategorised.' }),
+  ]);
+  mount(section, expense, h('div', { style: { height: '16px' } }), project);
+}
+
+async function categorySection(ctx, { path, title, blurb, placeholder, detaches }) {
   const admin = isAdmin();
-  const res = await api.get('/api/company/categories');
+  const res = await api.get(path);
   const list = h('div');
-  const rows = res.items.map((c) => {
-    const nameInput = input({ value: c.name, readOnly: !admin, class: 'input', onblur: async (e) => { const v = e.target.value.trim(); if (v && v !== c.name) { try { await api.patch(`/api/company/categories/${c.id}`, { name: v }); c.name = v; toast('Category renamed'); ctx.refreshCompany(); } catch (err) { toast(err.message, { type: 'error' }); e.target.value = c.name; } } } });
-    const color = admin ? colorInput({ value: c.color || '#898781', onchange: async (e) => { await api.patch(`/api/company/categories/${c.id}`, { color: e.target.value }); ctx.refreshCompany(); } }) : colorDot(c.color, 14);
+  mount(list, res.items.map((c) => {
+    const nameInput = input({ value: c.name, readOnly: !admin, class: 'input', onblur: async (e) => { const v = e.target.value.trim(); if (v && v !== c.name) { try { await api.patch(`${path}/${c.id}`, { name: v }); c.name = v; toast('Category renamed'); ctx.refreshCompany(); } catch (err) { toast(err.message, { type: 'error' }); e.target.value = c.name; } } } });
+    const color = admin ? colorInput({ value: c.color || '#898781', onchange: async (e) => { await api.patch(`${path}/${c.id}`, { color: e.target.value }); ctx.refreshCompany(); } }) : colorDot(c.color, 14);
     return h('div', { class: 'member-row', style: c.archived ? { opacity: .55 } : null },
       color, h('div', { class: 'info' }, nameInput),
       c.archived ? badge('Archived') : null,
-      admin ? button(c.archived ? 'Unarchive' : 'Archive', { size: 'sm', variant: 'ghost', onclick: async () => { await api.patch(`/api/company/categories/${c.id}`, { archived: !c.archived }); await ctx.refreshCompany(); ctx.refresh(); } }) : null,
+      admin ? button(c.archived ? 'Unarchive' : 'Archive', { size: 'sm', variant: 'ghost', onclick: async () => { await api.patch(`${path}/${c.id}`, { archived: !c.archived }); await ctx.refreshCompany(); ctx.refresh(); } }) : null,
       admin ? iconButton('trash', { title: 'Delete category', onclick: async () => {
-        const ok = await confirmDialog({ title: `Delete "${c.name}"?`, message: 'Expenses in this category become uncategorised. Archiving keeps history intact.', confirmText: 'Delete', danger: true });
+        const ok = await confirmDialog({ title: `Delete "${c.name}"?`, message: `${detaches} Archiving keeps history intact.`, confirmText: 'Delete', danger: true });
         if (!ok) return;
-        await api.del(`/api/company/categories/${c.id}`); toast('Category deleted'); await ctx.refreshCompany(); ctx.refresh();
+        await api.del(`${path}/${c.id}`); toast('Category deleted'); await ctx.refreshCompany(); ctx.refresh();
       } }) : null);
-  });
-  mount(list, rows);
+  }));
+  if (!res.items.length) mount(list, h('p', { class: 'muted small' }, 'None yet.'));
+
   let addForm = null;
   if (admin) {
     addForm = h('form', { class: 'flex', novalidate: true, style: { alignItems: 'flex-end', gap: '8px', flexWrap: 'wrap' } },
-      field({ label: 'New category', name: 'name', input: input({ placeholder: 'e.g. Payroll', required: true }) }),
+      field({ label: 'New category', name: 'name', input: input({ placeholder, required: true }) }),
       field({ label: 'Color', name: 'color', input: colorInput({ value: '#2a78d6' }) }),
       h('button', { class: 'btn btn-primary', type: 'submit' }, 'Add'));
-    handleSubmit(addForm, async (data) => { await api.post('/api/company/categories', { name: data.name, color: data.color }); toast('Category added'); await ctx.refreshCompany(); ctx.refresh(); });
+    handleSubmit(addForm, async (data) => { await api.post(path, { name: data.name, color: data.color }); toast('Category added'); await ctx.refreshCompany(); ctx.refresh(); });
   }
-  mount(section, sectionCard('Expense categories', 'Group spending so the summary tells you where the money goes.', list, addForm ? h('div', { class: 'divider' }) : null, addForm));
+  return sectionCard(title, blurb, list, addForm ? h('div', { class: 'divider' }) : null, addForm);
 }

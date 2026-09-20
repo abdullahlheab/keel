@@ -51,7 +51,7 @@ export function buildOpenApi(baseUrl) {
       '/categories': { get: { tags: ['Account'], summary: 'List expense categories', description: 'Use the ids as `categoryId` on expenses.', responses: ok(list('Category')) } },
 
       '/projects': {
-        get: { tags: ['Projects'], summary: 'List projects', parameters: [q('status', 'Only this status.', { type: 'string', enum: PROJECT_STATUS }), q('includeArchived', 'Set to 1 to include archived projects.')], responses: ok(list('Project')) },
+        get: { tags: ['Projects'], summary: 'List projects', parameters: [q('status', 'Only this status.', { type: 'string', enum: PROJECT_STATUS }), q('includeArchived', 'Set to 1 to include archived projects.'), q('category', 'Project category id, or `none` for projects without one.')], responses: ok(list('Project')) },
         post: { tags: ['Projects'], summary: 'Create a project', ...body('ProjectInput'), responses: created(ref('Project')) },
       },
       '/projects/{id}': {
@@ -172,6 +172,14 @@ export function buildOpenApi(baseUrl) {
         get: { tags: ['Workspace'], summary: 'List expense categories', description: 'The same list as `GET /categories`.', responses: ok(list('Category')) },
         post: { tags: ['Workspace'], summary: 'Create a category', description: 'Admins and owners only.', requestBody: { required: true, ...json({ type: 'object', required: ['name'], properties: { name: str('Category name.'), color: str('Hex color such as #2a78d6.') } }) }, responses: created(ref('Category')) },
       },
+      '/company/project-categories': {
+        get: { tags: ['Workspace'], summary: 'List project categories', description: 'Separate from expense categories, so the same name can mean a kind of project and a kind of spending.', responses: ok(list('Category')) },
+        post: { tags: ['Workspace'], summary: 'Create a project category', description: 'Admins and owners only.', requestBody: { required: true, ...json({ type: 'object', required: ['name'], properties: { name: str('Category name.'), color: str('Hex color such as #2a78d6.') } }) }, responses: created(ref('Category')) },
+      },
+      '/company/project-categories/{id}': {
+        patch: { tags: ['Workspace'], summary: 'Update a project category', description: 'Admins and owners only.', parameters: [p('id', 'Project category id.')], requestBody: { required: true, ...json({ type: 'object', properties: { name: str('Name.'), color: str('Hex color.'), archived: { type: 'boolean' }, sortOrder: { type: 'integer' } } }) }, responses: ok(ref('Category')) },
+        delete: { tags: ['Workspace'], summary: 'Delete a project category', description: 'Admins and owners only. Projects keep their history and become uncategorised.', parameters: [p('id', 'Project category id.')], responses: ok({ type: 'object', properties: { ok: { type: 'boolean' }, detachedProjects: { type: 'integer' } } }) },
+      },
       '/company/categories/{id}': {
         patch: { tags: ['Workspace'], summary: 'Update a category', description: 'Admins and owners only.', parameters: [p('id', 'Category id.')], requestBody: { required: true, ...json({ type: 'object', properties: { name: str('Name.'), color: str('Hex color.'), archived: { type: 'boolean' }, sortOrder: { type: 'integer' } } }) }, responses: ok(ref('Category')) },
         delete: { tags: ['Workspace'], summary: 'Delete a category', description: 'Admins and owners only. Expenses keep their history and become uncategorised.', parameters: [p('id', 'Category id.')], responses: ok({ type: 'object', properties: { ok: { type: 'boolean' }, detachedExpenses: { type: 'integer' } } }) },
@@ -187,6 +195,7 @@ export function buildOpenApi(baseUrl) {
           type: 'object',
           properties: {
             id: uuid('Project id.'), name: str('Name.'), description: str('Description.', { nullable: true }), status: { type: 'string', enum: PROJECT_STATUS }, color: str('Hex color.'),
+            categoryId: uuid('Project category, from GET /company/project-categories.'),
             budgetCents: { type: 'integer', nullable: true, description: 'Budget in cents.' }, spentCents: { type: 'integer', description: 'All-time spend in cents.' }, expenseCount: { type: 'integer' },
             taskTotal: { type: 'integer' }, taskDone: { type: 'integer' }, taskOpen: { type: 'integer' }, startDate: date('Start date.'), endDate: date('Target end date.'), leadUserId: uuid('Project lead.'),
             createdAt: str('ISO timestamp.'), updatedAt: str('ISO timestamp.'),
@@ -196,7 +205,7 @@ export function buildOpenApi(baseUrl) {
           type: 'object', required: ['name'],
           properties: {
             name: str('Project name. Required when creating.'), description: str('What the project is about.'), status: { type: 'string', enum: PROJECT_STATUS, description: 'Defaults to active.' },
-            color: str('Hex color such as #2a78d6.'), budget: { type: 'number', description: 'Budget as a decimal amount, e.g. 12000 or "12,000.00".' }, startDate: date('Start date.'), endDate: date('Target end date.'), leadUserId: uuid('A member id.'),
+            color: str('Hex color such as #2a78d6.'), categoryId: uuid('From GET /company/project-categories.'), budget: { type: 'number', description: 'Budget as a decimal amount, e.g. 12000 or "12,000.00".' }, startDate: date('Start date.'), endDate: date('Target end date.'), leadUserId: uuid('A member id.'),
           },
         },
         Task: {

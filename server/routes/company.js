@@ -30,6 +30,7 @@ workspaceRoutes.get('/company', (req, res) => {
     role: req.role,
     members: getMembers(req.company.id),
     categories: all('SELECT * FROM categories WHERE company_id = ? ORDER BY archived, sort_order, name', req.company.id).map(categoryRow),
+    projectCategories: all('SELECT * FROM project_categories WHERE company_id = ? ORDER BY archived, sort_order, name', req.company.id).map(categoryRow),
     counts,
   });
 });
@@ -158,6 +159,42 @@ workspaceRoutes.delete('/company/categories/:id', requireRole('admin'), (req, re
   });
   logActivity({ companyId: req.company.id, userId: req.user.id, action: 'deleted', entityType: 'category', entityId: cat.id, summary: `${req.user.name} deleted the expense category "${cat.name}"${used ? `, leaving ${used} expense${used === 1 ? '' : 's'} uncategorised` : ''}` });
   res.json({ ok: true, detachedExpenses: used });
+});
+
+// ---------- project categories ----------
+// Kept apart from expense categories so the same word can mean different things in each.
+workspaceRoutes.get('/company/project-categories', (req, res) => {
+  res.json({ items: all('SELECT * FROM project_categories WHERE company_id = ? ORDER BY archived, sort_order, name', req.company.id).map(categoryRow) });
+});
+
+workspaceRoutes.post('/company/project-categories', requireRole('admin'), (req, res) => {
+  const body = validate({ name: rules.string({ required: true, min: 1, max: 40 }), color: rules.color({ default: '#898781' }) }, req.body);
+  if (one('SELECT id FROM project_categories WHERE company_id = ? AND name = ? COLLATE NOCASE', req.company.id, body.name)) throw new HttpError(409, 'A project category with that name already exists');
+  const maxSort = one('SELECT coalesce(max(sort_order), -1) AS m FROM project_categories WHERE company_id = ?', req.company.id).m;
+  const id = uid();
+  db.prepare('INSERT INTO project_categories (id, company_id, name, color, sort_order) VALUES (?, ?, ?, ?, ?)').run(id, req.company.id, body.name, body.color, maxSort + 1);
+  logActivity({ companyId: req.company.id, userId: req.user.id, action: 'created', entityType: 'category', entityId: id, summary: `${req.user.name} added the project category "${body.name}"` });
+  res.status(201).json(categoryRow(one('SELECT * FROM project_categories WHERE id = ?', id)));
+});
+
+workspaceRoutes.patch('/company/project-categories/:id', requireRole('admin'), (req, res) => {
+  const cat = one('SELECT * FROM project_categories WHERE id = ? AND company_id = ?', req.params.id, req.company.id);
+  if (!cat) throw notFound('Project category');
+  const body = validate({ name: rules.string({ min: 1, max: 40 }), color: rules.color(), archived: rules.bool(), sortOrder: rules.int({ min: 0, max: 1000 }) }, req.body, { partial: true });
+  db.prepare('UPDATE project_categories SET name = ?, color = ?, archived = ?, sort_order = ? WHERE id = ?')
+    .run(body.name ?? cat.name, body.color ?? cat.color, body.archived === undefined ? cat.archived : (body.archived ? 1 : 0), body.sortOrder ?? cat.sort_order, cat.id);
+  const what = body.archived === true ? `archived the project category "${cat.name}"` : body.archived === false ? `restored the project category "${cat.name}"` : `renamed the project category "${cat.name}" to "${body.name ?? cat.name}"`;
+  logActivity({ companyId: req.company.id, userId: req.user.id, action: 'updated', entityType: 'category', entityId: cat.id, summary: `${req.user.name} ${what}` });
+  res.json(categoryRow(one('SELECT * FROM project_categories WHERE id = ?', cat.id)));
+});
+
+workspaceRoutes.delete('/company/project-categories/:id', requireRole('admin'), (req, res) => {
+  const cat = one('SELECT * FROM project_categories WHERE id = ? AND company_id = ?', req.params.id, req.company.id);
+  if (!cat) throw notFound('Project category');
+  const used = one('SELECT count(*) AS c FROM projects WHERE category_id = ?', cat.id).c;
+  db.prepare('DELETE FROM project_categories WHERE id = ?').run(cat.id);
+  logActivity({ companyId: req.company.id, userId: req.user.id, action: 'deleted', entityType: 'category', entityId: cat.id, summary: `${req.user.name} deleted the project category "${cat.name}"${used ? `, leaving ${used} project${used === 1 ? '' : 's'} uncategorised` : ''}` });
+  res.json({ ok: true, detachedProjects: used });
 });
 
 router.use(workspaceRoutes);

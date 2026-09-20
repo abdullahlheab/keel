@@ -38,9 +38,15 @@ export function makeCompanyKey(name) {
   return key.length >= 2 ? key : (key + 'CO').slice(0, 2);
 }
 
+const DEFAULT_PROJECT_CATEGORIES = [
+  ['Client work', '#2a78d6'], ['Internal', '#4a3aa7'], ['Product', '#1baf7a'], ['Research', '#eda100'], ['Operations', '#898781'],
+];
+
 function seedCategories(companyId) {
   const stmt = db.prepare('INSERT INTO categories (id, company_id, name, color, sort_order) VALUES (?, ?, ?, ?, ?)');
   DEFAULT_CATEGORIES.forEach(([name, color], i) => stmt.run(uid(), companyId, name, color, i));
+  const proj = db.prepare('INSERT INTO project_categories (id, company_id, name, color, sort_order) VALUES (?, ?, ?, ?, ?)');
+  DEFAULT_PROJECT_CATEGORIES.forEach(([name, color], i) => proj.run(uid(), companyId, name, color, i));
 }
 
 function mePayload(user) {

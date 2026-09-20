@@ -1,7 +1,7 @@
 // Single project: overview with spend and progress, tasks, expenses.
 import { h, mount, money, date, number, STATUS } from '../dom.js';
 import { api } from '../api.js';
-import { state, currency, member, category, isAdmin } from '../state.js';
+import { state, currency, member, category, projectCategory, isAdmin } from '../state.js';
 import { pageHeader, spinner, icon, avatar, button, emptyState, statusBadge, tabs, colorDot, menu, iconButton, kv, priorityBadge } from '../components/ui.js';
 import { confirmDialog } from '../components/modal.js';
 import { toast } from '../components/toast.js';
@@ -21,6 +21,7 @@ export async function render(view, ctx) {
   const p = data.project;
   const cur = currency();
   const lead = p.leadUserId ? member(p.leadUserId) : null;
+  const cat = p.categoryId ? projectCategory(p.categoryId) : null;
   const refresh = ctx.refresh;
 
   const actionsMenu = menu(iconButton('more', { title: 'More' }), [
@@ -86,6 +87,7 @@ export async function render(view, ctx) {
       h('div', { class: 'grid grid-2' },
         h('div', { class: 'card' }, h('div', { class: 'card-head' }, h('h3', {}, 'Details')), h('div', { class: 'card-body grid grid-2' },
           kv('Lead', lead ? h('span', { class: 'flex' }, avatar(lead, { size: 'xs' }), lead.name) : 'Unassigned'),
+          kv('Category', cat ? h('a', { href: `/projects?category=${cat.id}`, class: 'flex', style: { gap: '6px', color: 'inherit' } }, colorDot(cat.color, 9), cat.name) : h('span', { class: 'muted' }, 'None')),
           kv('Status', statusBadge('project', p.status)),
           kv('Created', `${date(p.createdAt)} by ${member(p.createdBy)?.name || 'a former member'}`),
           kv('Last updated', date(p.updatedAt)))),

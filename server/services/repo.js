@@ -22,6 +22,7 @@ export function projectRow(r) {
     description: decrypt(r.description_enc),
     status: r.status,
     color: r.color,
+    categoryId: r.category_id ?? null,
     budgetCents: decryptInt(r.budget_cents_enc),
     startDate: r.start_date,
     endDate: r.end_date,

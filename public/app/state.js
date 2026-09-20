@@ -9,6 +9,7 @@ export const state = {
   role: null,
   members: [],
   categories: [],
+  projectCategories: [],
   projects: [],
   counts: {},
   theme: 'system',
@@ -45,6 +46,7 @@ export function setCompanyData(data) {
   state.role = data.role;
   state.members = data.members;
   state.categories = data.categories;
+  state.projectCategories = data.projectCategories || [];
   state.counts = data.counts || {};
   const idx = state.companies.findIndex((c) => c.id === data.company.id);
   if (idx !== -1) state.companies[idx] = { ...state.companies[idx], ...data.company, role: data.role };
@@ -53,6 +55,7 @@ export function setCompanyData(data) {
 
 export function member(id) { return state.members.find((m) => m.id === id) || null; }
 export function category(id) { return state.categories.find((c) => c.id === id) || null; }
+export function projectCategory(id) { return state.projectCategories.find((c) => c.id === id) || null; }
 export function project(id) { return state.projects.find((p) => p.id === id) || null; }
 export function isAdmin() { return state.role === 'admin' || state.role === 'owner'; }
 export function isOwner() { return state.role === 'owner'; }

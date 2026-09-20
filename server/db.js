@@ -15,6 +15,10 @@ db.exec('PRAGMA synchronous = NORMAL');
 
 export const now = () => new Date().toISOString();
 
+// SQLite has no uuid() builtin. Ids that the API hands back must match the dashed v4 shape
+// randomUUID() produces, because `rules.id()` validates that format on the way back in.
+export const SQL_UUID = `lower(substr(hex(randomblob(4)),1,8) || '-' || substr(hex(randomblob(2)),1,4) || '-4' || substr(hex(randomblob(2)),2,3) || '-' || substr('89ab',1+(abs(random())%4),1) || substr(hex(randomblob(2)),2,3) || '-' || substr(hex(randomblob(6)),1,12))`;
+
 const MIGRATIONS = [
   // 1: initial schema
   `
@@ -258,6 +262,30 @@ const MIGRATIONS = [
   );
   CREATE INDEX idx_task_events_company ON task_events(company_id, at);
   CREATE INDEX idx_task_events_task ON task_events(task_id, at);
+  `,
+  // 6: project categories. A table of their own rather than a flag on `categories`, so a name like
+  // "Marketing" can be both an expense category and a project category.
+  `
+  CREATE TABLE project_categories (
+    id TEXT PRIMARY KEY,
+    company_id TEXT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    color TEXT,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    archived INTEGER NOT NULL DEFAULT 0,
+    UNIQUE(company_id, name)
+  );
+  ALTER TABLE projects ADD COLUMN category_id TEXT REFERENCES project_categories(id) ON DELETE SET NULL;
+
+  -- Give every company that already exists the same starting set a new one gets.
+  INSERT INTO project_categories (id, company_id, name, color, sort_order)
+  SELECT ${SQL_UUID}, c.id, v.name, v.color, v.pos
+  FROM companies c
+  JOIN (SELECT 'Client work' AS name, '#2a78d6' AS color, 0 AS pos
+        UNION ALL SELECT 'Internal', '#4a3aa7', 1
+        UNION ALL SELECT 'Product', '#1baf7a', 2
+        UNION ALL SELECT 'Research', '#eda100', 3
+        UNION ALL SELECT 'Operations', '#898781', 4) v;
 
   -- Seed history for work that already exists. Creation and completion are the two moments we can
   -- recover exactly; anything in between was never recorded, so charts before this point show a
