@@ -17,7 +17,8 @@ Built for two founders who want one place that answers "what are we working on, 
 | **Task board** | Backlog → To do → In progress → In review → Done, drag and drop, priorities, labels, due dates, checklists, comments, `KEY-12` task ids, list view |
 | **Discussion room** | A forum for the things that do not belong on the board: topics by category (general, announcement, question, idea, decision), threaded replies, mark-the-answer, pin, lock, resolve and archive, optional link to a project, `KEY-D4` topic ids |
 | **Multi-select** | Explorer-style: Ctrl/Shift+click or hover checkboxes, Ctrl+A, then right-click (or the floating bar) to move, assign, reprioritise, relabel, duplicate, copy or delete many tasks at once; drag a selection between columns; same for expenses (status, category, project, payer, export, delete) and discussion topics (category, state, project, pin, lock, delete) |
-| **Activity** | Who changed what and when, across the whole company |
+| **Insights** | The Azure Boards family of charts, drawn from recorded status changes: cumulative flow, burnup (completed against total scope, so scope creep shows), velocity per week, and cycle time. Company-wide on the board, or per project |
+| **Activity** | Who changed what and when, across the whole company — including anything done through the API, marked with the key's name. Every project, task and discussion also has its own History |
 | **API** | REST API at `/api/v1` with personal API keys (read-only or read & write, optional expiry), OpenAPI document, in-app docs with examples and a key tester |
 
 ## Security model

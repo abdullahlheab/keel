@@ -243,6 +243,34 @@ const MIGRATIONS = [
   CREATE INDEX idx_posts_topic ON discussion_posts(topic_id, created_at);
   ALTER TABLE company_counters ADD COLUMN topic_seq INTEGER NOT NULL DEFAULT 0;
   `,
+  // 5: task status history, so flow and burnup charts can be drawn over time.
+  // project_id is a snapshot rather than a foreign key: deleting a project must not erase the
+  // history of the work that was in it.
+  `
+  CREATE TABLE task_events (
+    id TEXT PRIMARY KEY,
+    company_id TEXT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    project_id TEXT,
+    from_status TEXT,
+    to_status TEXT NOT NULL,
+    at TEXT NOT NULL
+  );
+  CREATE INDEX idx_task_events_company ON task_events(company_id, at);
+  CREATE INDEX idx_task_events_task ON task_events(task_id, at);
+
+  -- Seed history for work that already exists. Creation and completion are the two moments we can
+  -- recover exactly; anything in between was never recorded, so charts before this point show a
+  -- task as open from the day it was created until the day it was finished.
+  INSERT INTO task_events (id, company_id, task_id, project_id, from_status, to_status, at)
+  SELECT lower(hex(randomblob(16))), company_id, id, project_id, NULL,
+         CASE WHEN completed_at IS NOT NULL THEN 'todo' ELSE status END, created_at
+  FROM tasks;
+
+  INSERT INTO task_events (id, company_id, task_id, project_id, from_status, to_status, at)
+  SELECT lower(hex(randomblob(16))), company_id, id, project_id, 'todo', 'done', completed_at
+  FROM tasks WHERE completed_at IS NOT NULL;
+  `,
 ];
 
 function migrate() {

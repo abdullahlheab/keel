@@ -475,6 +475,24 @@ img, svg { display: block; max-width: 100%; }
 .desc-view.placeholder { color: var(--muted); font-style: italic; }
 .saved-hint { font-size: 12px; color: var(--muted); display: inline-flex; align-items: center; gap: 4px; transition: opacity .3s; }
 
+/* ---------- per-item history ---------- */
+.history { border-top: 1px solid var(--border); padding-top: 10px; margin-top: 4px; }
+.history > summary { display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 12.5px; font-weight: 600; color: var(--text-2); list-style: none; }
+.history > summary::-webkit-details-marker { display: none; }
+.history > summary::after { content: '▸'; color: var(--muted); transition: transform .12s; }
+.history[open] > summary::after { transform: rotate(90deg); }
+.history > summary:hover { color: var(--text); }
+.history-box { margin-top: 10px; }
+
+/* ---------- board analytics ---------- */
+.chart .flow-band { fill: var(--fill); fill-opacity: .85; stroke: var(--surface); stroke-width: .5; }
+.chart .burnup-gap { fill: var(--s1); fill-opacity: .08; }
+.chart .line { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.chart .line-scope { stroke: var(--s1); }
+.chart .line-done { stroke: var(--good); }
+.chart .cursor-line { stroke: var(--border-strong); stroke-width: 1; stroke-dasharray: 3 3; pointer-events: none; }
+.chart .hit { fill: transparent; }
+
 /* ---------- discussion room ---------- */
 .cat-idea { background: var(--surface-3); color: var(--s7); }
 .topic-list { display: flex; flex-direction: column; overflow: hidden; }

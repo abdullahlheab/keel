@@ -7,9 +7,10 @@ import { HttpError, notFound, forbidden } from '../middleware/errors.js';
 import { hasRole } from '../middleware/auth.js';
 import { logActivity } from '../services/activity.js';
 import { taskRow, commentRow, nextTaskNumber, listProjects } from '../services/repo.js';
+import { boardInsights, STATUSES } from '../services/insights.js';
 
 const router = Router();
-export const STATUSES = ['backlog', 'todo', 'in_progress', 'review', 'done'];
+export { STATUSES };
 const PRIORITIES = ['low', 'medium', 'high', 'urgent'];
 const STATUS_LABEL = { backlog: 'Backlog', todo: 'To do', in_progress: 'In progress', review: 'In review', done: 'Done' };
 
@@ -55,6 +56,13 @@ function loadTask(companyId, idOrRef) {
 
 function taskRef(req, task) { return `${req.company.key}-${task.number}`; }
 
+// Every status change is recorded so the flow and burnup charts have real history to draw.
+function recordEvent(companyId, task, fromStatus, toStatus, at) {
+  if (fromStatus === toStatus) return;
+  db.prepare('INSERT INTO task_events (id, company_id, task_id, project_id, from_status, to_status, at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+    .run(uid(), companyId, task.id ?? task, task.projectId ?? null, fromStatus, toStatus, at);
+}
+
 function listTasks(req, q) {
   let items = all(`${TASK_SELECT} WHERE t.company_id = ? ORDER BY t.status, t.position, t.created_at`, req.company.id).map(taskRow);
   if (q.project === 'none') items = items.filter((t) => !t.projectId);
@@ -84,6 +92,10 @@ function requireProject(req) {
 router.get('/tasks', (req, res) => res.json(listTasks(req, req.query)));
 router.get('/projects/:projectId/tasks', (req, res) => res.json(listTasks(req, { ...req.query, project: requireProject(req) })));
 
+// ---------- board analytics ----------
+router.get('/insights', (req, res) => res.json(boardInsights(req.company.id, { projectId: req.query.project || null, days: req.query.days })));
+router.get('/projects/:projectId/insights', (req, res) => res.json(boardInsights(req.company.id, { projectId: requireProject(req), days: req.query.days })));
+
 router.post('/tasks', (req, res) => res.status(201).json(createTask(req, req.body)));
 router.post('/projects/:projectId/tasks', (req, res) => {
   const projectId = requireProject(req);
@@ -103,7 +115,9 @@ function createTask(req, raw) {
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
       .run(id, req.company.id, body.projectId ?? null, number, encrypt(body.title), encrypt(body.description ?? null), body.status, body.priority, body.assigneeUserId ?? null, body.dueDate ?? null,
         encryptJSON(body.labels ?? []), encryptJSON(cleanChecklist(body.checklist)), maxPos + 1, req.user.id, ts, ts, body.status === 'done' ? ts : null);
-    return loadTask(req.company.id, id);
+    const created = loadTask(req.company.id, id);
+    recordEvent(req.company.id, created, null, body.status, ts);
+    return created;
   });
   logActivity({ companyId: req.company.id, userId: req.user.id, action: 'created', entityType: 'task', entityId: id, summary: `${req.user.name} created task ${taskRef(req, task)} "${task.title}"` });
   return task;
@@ -144,6 +158,7 @@ router.post('/tasks/bulk', (req, res) => {
                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
         .run(id, req.company.id, t.projectId, number, encrypt(`${t.title} (copy)`), encrypt(t.description ?? null), t.status, t.priority, t.assigneeUserId, t.dueDate,
           encryptJSON(t.labels), encryptJSON(t.checklist.map((c) => ({ ...c, id: uid(), done: false }))), maxPos + 1, req.user.id, ts, ts, t.status === 'done' ? ts : null);
+      recordEvent(req.company.id, { id, projectId: t.projectId }, null, t.status, ts);
       return id;
     }));
     log('created', `duplicated ${noun} (${refs})`);
@@ -159,7 +174,10 @@ router.post('/tasks/bulk', (req, res) => {
       const pos = db.prepare('UPDATE tasks SET position = ? WHERE id = ?');
       column.forEach((id, i) => pos.run(i + 1, id));
       const st = db.prepare('UPDATE tasks SET status = ?, updated_at = ?, completed_at = ? WHERE id = ?');
-      for (const t of tasks) st.run(mv.status, ts, mv.status === 'done' ? (t.completedAt || ts) : null, t.id);
+      for (const t of tasks) {
+        st.run(mv.status, ts, mv.status === 'done' ? (t.completedAt || ts) : null, t.id);
+        recordEvent(req.company.id, t, t.status, mv.status, ts);
+      }
     });
     if (tasks.some((t) => t.status !== mv.status)) log('moved', `moved ${noun} to ${STATUS_LABEL[mv.status]}`);
     return res.json(reload());
@@ -192,6 +210,7 @@ router.post('/tasks/bulk', (req, res) => {
       if (patch.status && patch.status !== t.status) { nextPos += 1; position = nextPos; }
       upd.run(status, patch.priority ?? t.priority, 'assigneeUserId' in patch ? patch.assigneeUserId : t.assigneeUserId, 'projectId' in patch ? patch.projectId : t.projectId,
         'dueDate' in patch ? patch.dueDate : t.dueDate, position, status === 'done' ? (t.completedAt || ts) : null, ts, t.id);
+      recordEvent(req.company.id, { id: t.id, projectId: 'projectId' in patch ? patch.projectId : t.projectId }, t.status, status, ts);
     }
   });
   let summary = `updated ${noun}`;
@@ -228,6 +247,7 @@ router.patch('/tasks/:id', (req, res) => {
     db.prepare(`UPDATE tasks SET project_id = ?, title_enc = ?, description_enc = ?, status = ?, priority = ?, assignee_user_id = ?, due_date = ?, labels_enc = ?, checklist_enc = ?, position = ?, updated_at = ?, completed_at = ? WHERE id = ?`)
       .run(next.projectId ?? null, encrypt(next.title), encrypt(next.description ?? null), next.status, next.priority, next.assigneeUserId ?? null, next.dueDate ?? null,
         encryptJSON(next.labels ?? []), encryptJSON(next.checklist ?? []), position, ts, completedAt, current.id);
+    recordEvent(req.company.id, { id: current.id, projectId: next.projectId }, current.status, next.status, ts);
   });
   const changed = Object.keys(body);
   let verb = `updated task ${taskRef(req, current)}`;
@@ -254,6 +274,7 @@ router.post('/tasks/:id/move', (req, res) => {
     column.forEach((id, i) => upd.run(i + 1, id));
     const completedAt = body.status === 'done' ? (current.completedAt || ts) : null;
     db.prepare('UPDATE tasks SET status = ?, updated_at = ?, completed_at = ? WHERE id = ?').run(body.status, ts, completedAt, current.id);
+    recordEvent(req.company.id, current, current.status, body.status, ts);
   });
   if (body.status !== current.status) {
     logActivity({ companyId: req.company.id, userId: req.user.id, action: 'moved', entityType: 'task', entityId: current.id, summary: `${req.user.name} moved ${taskRef(req, current)} to ${STATUS_LABEL[body.status]}` });

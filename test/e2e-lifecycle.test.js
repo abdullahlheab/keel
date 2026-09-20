@@ -197,6 +197,59 @@ test('the activity feed pages backwards without repeating or skipping', async ()
   assert.ok(capped.data.items.length <= 200, 'the page size is capped');
 });
 
+test('every kind of change lands in the audit trail, and each item has its own history', async () => {
+  const cat = (await owner.post('/api/company/categories', { name: 'Audited' })).data.id;
+  await owner.patch(`/api/company/categories/${cat}`, { archived: true });
+  await owner.del(`/api/company/categories/${cat}`);
+
+  const inv = await owner.post('/api/company/invites', { role: 'member' });
+  await owner.del(`/api/company/invites/${inv.data.invite.id}`);
+
+  const expense = (await owner.post('/api/expenses', { amount: 12, date: '2026-09-10', vendor: 'Receipted' })).data.id;
+  const receipt = (await owner.post(`/api/expenses/${expense}/receipts`, Buffer.from('%PDF-1.4 x'), { headers: { 'Content-Type': 'application/pdf', 'X-Filename': 'bill.pdf' } })).data.id;
+  await owner.del(`/api/receipts/${receipt}`);
+
+  const feed = (await owner.get('/api/activity?limit=200')).data.items.map((a) => a.summary);
+  for (const phrase of ['added the expense category', 'archived the expense category', 'deleted the expense category', 'revoked the invite', 'attached the receipt', 'removed the receipt']) {
+    assert.ok(feed.some((s) => s.includes(phrase)), `the log should mention "${phrase}"`);
+  }
+  assert.ok((await owner.get('/api/activity?entityType=category')).data.items.length >= 3, 'categories are filterable');
+
+  // Per-item history: the same feed, narrowed to one thing.
+  const task = (await owner.post('/api/tasks', { title: 'Has a history' })).data;
+  await owner.patch(`/api/tasks/${task.id}`, { status: 'in_progress' });
+  await owner.patch(`/api/tasks/${task.id}`, { status: 'done' });
+  await owner.post(`/api/tasks/${task.id}/comments`, { body: 'note' });
+
+  const history = await owner.get(`/api/activity?entityType=task&entityId=${task.id}`);
+  assert.ok(history.data.items.length >= 4, 'created, two moves and a comment');
+  assert.ok(history.data.items.every((a) => a.entityId === task.id), 'nothing from other items leaks in');
+  const actions = history.data.items.map((a) => a.action);
+  assert.ok(actions.includes('created') && actions.includes('moved') && actions.includes('commented'));
+});
+
+test('work done with an API key is attributed to the key in every item history', async () => {
+  const secret = (await owner.post('/api/keys', { name: 'Auditor', scope: 'write', password: 'first-long-password' })).data.secret;
+  const bot = client(srv.base);
+  const opts = { headers: { Authorization: `Bearer ${secret}` }, noCsrf: true };
+
+  const task = (await bot.post('/api/v1/tasks', { title: 'Raised by a robot' }, opts)).data;
+  await bot.patch(`/api/v1/tasks/${task.id}`, { status: 'done' }, opts);
+  const topic = (await bot.post('/api/v1/discussions', { title: 'Robot topic' }, opts)).data;
+
+  const taskHistory = (await owner.get(`/api/activity?entityType=task&entityId=${task.id}`)).data.items;
+  assert.ok(taskHistory.every((a) => a.summary.includes('(API: Auditor)')), 'the key name is on every entry');
+  assert.ok(taskHistory.some((a) => a.action === 'moved'));
+
+  const topicHistory = (await owner.get(`/api/activity?entityType=discussion&entityId=${topic.id}`)).data.items;
+  assert.ok(topicHistory.some((a) => a.summary.includes('(API: Auditor)')));
+
+  // And the history is readable back through the API itself.
+  const viaKey = await bot.get(`/api/v1/activity?entityType=task&entityId=${task.id}`, opts);
+  assert.equal(viaKey.status, 200);
+  assert.equal(viaKey.data.items.length, taskHistory.length);
+});
+
 test('changing the password signs out everyone else and kills the keys', async () => {
   const key = (await owner.post('/api/keys', { name: 'Doomed by reset', scope: 'read', password: 'first-long-password' })).data.secret;
   const bot = client(srv.base);

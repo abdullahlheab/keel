@@ -318,6 +318,7 @@ router.post('/expenses/:id/receipts', rawBody, (req, res) => {
   const id = uid();
   db.prepare('INSERT INTO receipts (id, company_id, expense_id, filename_enc, mime, size, stored_name, uploaded_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
     .run(id, req.company.id, row.id, encrypt(filename), mime, req.body.length, storedName, req.user.id, now());
+  logActivity({ companyId: req.company.id, userId: req.user.id, action: 'attached', entityType: 'expense', entityId: row.id, summary: `${req.user.name} attached the receipt "${filename}"` });
   res.status(201).json(receiptRow(one('SELECT * FROM receipts WHERE id = ?', id)));
 });
 
@@ -342,6 +343,7 @@ router.delete('/receipts/:id', (req, res) => {
   if (exp && !canEdit(req, expenseRow(exp))) throw forbidden();
   db.prepare('DELETE FROM receipts WHERE id = ?').run(r.id);
   fs.rm(path.join(config.dataDir, 'uploads', r.stored_name), { force: true }, () => {});
+  logActivity({ companyId: req.company.id, userId: req.user.id, action: 'deleted', entityType: 'expense', entityId: r.expense_id, summary: `${req.user.name} removed the receipt "${receiptRow(r).filename}"` });
   res.json({ ok: true });
 });
 

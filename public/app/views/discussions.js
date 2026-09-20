@@ -8,6 +8,7 @@ import { field, input, textarea, select, handleSubmit, formActions, row } from '
 import { toast } from '../components/toast.js';
 import { createSelection, contextMenu, selectionBar, removeSelectionBar, selectBox } from '../components/selection.js';
 import { setQuery, navigate } from '../router.js';
+import { activityList } from './activity.js';
 
 const CATEGORY_OPTIONS = TOPIC_CATEGORIES.map((c) => ({ value: c, label: STATUS.topic[c].label }));
 const STATE_OPTIONS = TOPIC_STATES.map((s) => ({ value: s, label: STATUS.topicState[s].label }));
@@ -292,13 +293,21 @@ async function renderTopic(view, ctx) {
   const composer = canReply ? replyComposer(topic, null, refresh) : h('div', { class: 'callout' }, icon('lock'),
     h('span', {}, topic.state === 'archived' ? 'This topic is archived, so it is read-only.' : 'This topic is locked. An admin can still reply, or unlock it.'));
 
+  const historyBox = h('div', { class: 'history-box' }, h('p', { class: 'muted small' }, 'Loading…'));
+  api.get(`/api/activity?entityType=discussion&entityId=${topic.id}&limit=50`)
+    .then((res) => mount(historyBox, res.items.length ? activityList(res.items, { compact: true }) : h('p', { class: 'muted small' }, 'Nothing recorded yet.')))
+    .catch(() => mount(historyBox, h('p', { class: 'muted small' }, 'Could not load the history.')));
+
   mount(view,
     header,
     flags,
     opening,
     h('div', { class: 'section-title', style: { margin: '20px 0 10px' } }, `${topic.replyCount} repl${topic.replyCount === 1 ? 'y' : 'ies'}`),
     repliesBox,
-    composer);
+    composer,
+    h('details', { class: 'history' },
+      h('summary', {}, icon('clock', { size: 14 }), 'History'),
+      historyBox));
 }
 
 function renderReplies(box, topic, refresh) {

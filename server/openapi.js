@@ -93,6 +93,15 @@ export function buildOpenApi(baseUrl) {
         patch: { tags: ['Tasks'], summary: 'Edit a comment', description: 'The author, admins and owners only.', parameters: [taskId, p('commentId', 'Comment id.')], requestBody: { required: true, ...json({ type: 'object', required: ['body'], properties: { body: str('The new text.') } }) }, responses: ok(ref('Comment')) },
         delete: { tags: ['Tasks'], summary: 'Delete a comment', parameters: [taskId, p('commentId', 'Comment id.')], responses: ok({ type: 'object' }) },
       },
+      '/insights': {
+        get: {
+          tags: ['Tasks'], summary: 'Board analytics',
+          description: 'Cumulative flow, burnup, velocity and cycle time, derived from every recorded status change. `flow` gives one row per day with a count for each column; `burnup` gives total scope against completed work, so scope added mid-flight is visible; `velocity` counts what finished each week; `cycleTime` measures first sighting to done. History from before status changes were recorded shows a task as open from its creation date to its completion date.',
+          parameters: [q('project', 'Project id, or `none` for work without a project. Omit for the whole company.'), q('days', 'How far back to look, 7 to 730. Defaults to 30.', { type: 'integer' })],
+          responses: ok(ref('Insights')),
+        },
+      },
+      '/projects/{id}/insights': { get: { tags: ['Projects'], summary: 'Board analytics for one project', description: 'The same shape as `/insights`, narrowed to this project.', parameters: [p('id', 'Project id.'), q('days', 'How far back to look, 7 to 730.', { type: 'integer' })], responses: ok(ref('Insights')) } },
       '/tasks/bulk': { post: { tags: ['Tasks'], summary: 'Change many tasks at once', description: '`update` takes `data` with any of status, priority, assigneeUserId, projectId, dueDate. `move` takes `{ status, index }`. `add_label` and `remove_label` take `{ label }`. `duplicate` and `delete` take no data.', ...body('TaskBulk'), responses: ok(list('Task')) } },
 
       '/discussions': {
@@ -207,6 +216,18 @@ export function buildOpenApi(baseUrl) {
             priority: { type: 'string', enum: PRIORITY, description: 'Defaults to medium.' }, projectId: uuid('Put the task on this project.'), assigneeUserId: uuid('A member id.'), dueDate: date('Due date.'),
             labels: { type: 'array', items: { type: 'string' }, description: 'Up to 10 labels of at most 30 characters.' },
             checklist: { type: 'array', description: 'Replaces the checklist.', items: { type: 'object', properties: { text: { type: 'string' }, done: { type: 'boolean' } } } },
+          },
+        },
+        Insights: {
+          type: 'object',
+          properties: {
+            from: date('First day in the window.'), to: date('Last day, always today.'), days: { type: 'integer' },
+            statuses: { type: 'array', items: { type: 'string', enum: TASK_STATUS }, description: 'The board columns, in order, matching the keys in each flow row.' },
+            flow: { type: 'array', description: 'One row per day: { date, backlog, todo, in_progress, review, done }.', items: { type: 'object' } },
+            burnup: { type: 'array', description: 'One row per day: { date, total, done }.', items: { type: 'object', properties: { date: date('Day.'), total: { type: 'integer' }, done: { type: 'integer' } } } },
+            velocity: { type: 'array', description: 'One row per week: { week, completed }, the week being its Monday.', items: { type: 'object', properties: { week: date('Monday of the week.'), completed: { type: 'integer' } } } },
+            cycleTime: { type: 'object', properties: { averageDays: { type: 'number', nullable: true }, medianDays: { type: 'number', nullable: true }, completed: { type: 'integer', description: 'How many finished tasks the figures are based on.' } } },
+            totals: { type: 'object', properties: { tracked: { type: 'integer' }, open: { type: 'integer' }, done: { type: 'integer' }, completedInWindow: { type: 'integer' }, weeklyAverage: { type: 'number' } } },
           },
         },
         TaskBulk: { type: 'object', required: ['ids', 'action'], properties: { ids: { type: 'array', items: { type: 'string', format: 'uuid' }, description: 'Up to 200 task ids.' }, action: { type: 'string', enum: ['update', 'move', 'delete', 'duplicate', 'add_label', 'remove_label'] }, data: { type: 'object', description: 'Depends on the action.' } } },

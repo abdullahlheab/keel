@@ -9,7 +9,7 @@ import { openExpenseModal } from './expenses.js';
 import { toast } from '../components/toast.js';
 
 const TYPE_ICON = { project: 'folder', expense: 'receipt', task: 'checkSquare', discussion: 'message', member: 'users', company: 'settings', category: 'tag', apikey: 'key' };
-const TYPES = [['project', 'Projects'], ['expense', 'Expenses'], ['task', 'Tasks'], ['discussion', 'Discussions'], ['member', 'Members'], ['company', 'Company']].map(([value, label]) => ({ value, label }));
+const TYPES = [['project', 'Projects'], ['expense', 'Expenses'], ['task', 'Tasks'], ['discussion', 'Discussions'], ['member', 'Members'], ['category', 'Categories'], ['apikey', 'API keys'], ['company', 'Company']].map(([value, label]) => ({ value, label }));
 
 export async function render(view, ctx) {
   const q = ctx.query;
