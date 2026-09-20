@@ -11,6 +11,7 @@ import * as projects from './views/projects.js';
 import * as project from './views/project.js';
 import * as expenses from './views/expenses.js';
 import * as board from './views/board.js';
+import * as discussions from './views/discussions.js';
 import * as activity from './views/activity.js';
 import * as settings from './views/settings.js';
 import * as developers from './views/developers.js';
@@ -24,6 +25,8 @@ const VIEWS = {
   expenses: expenses.render,
   summary: expenses.render,
   board: board.render,
+  discussions: discussions.render,
+  discussion: discussions.render,
   activity: activity.render,
   settings: settings.render,
   developers: developers.render,

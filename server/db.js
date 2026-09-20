@@ -201,6 +201,48 @@ const MIGRATIONS = [
   );
   CREATE INDEX idx_api_keys_company ON api_keys(company_id);
   `,
+  // 3: two-factor hardening - per-session attempt counter and TOTP replay protection
+  `
+  ALTER TABLE sessions ADD COLUMN mfa_attempts INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE users ADD COLUMN totp_last_counter INTEGER;
+  `,
+  // 4: discussion room - forum topics with threaded replies
+  `
+  CREATE TABLE discussion_topics (
+    id TEXT PRIMARY KEY,
+    company_id TEXT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
+    number INTEGER NOT NULL,
+    title_enc TEXT NOT NULL,
+    body_enc TEXT,
+    category TEXT NOT NULL DEFAULT 'general' CHECK (category IN ('general','announcement','question','idea','decision')),
+    state TEXT NOT NULL DEFAULT 'open' CHECK (state IN ('open','resolved','archived')),
+    pinned INTEGER NOT NULL DEFAULT 0,
+    locked INTEGER NOT NULL DEFAULT 0,
+    answer_post_id TEXT,
+    created_by TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    -- set only when the title or body changes, so pinning or resolving never shows up as "edited"
+    edited_at TEXT,
+    last_post_at TEXT NOT NULL,
+    UNIQUE(company_id, number)
+  );
+  CREATE INDEX idx_topics_company ON discussion_topics(company_id, pinned DESC, last_post_at DESC);
+  CREATE INDEX idx_topics_project ON discussion_topics(project_id);
+  CREATE TABLE discussion_posts (
+    id TEXT PRIMARY KEY,
+    company_id TEXT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    topic_id TEXT NOT NULL REFERENCES discussion_topics(id) ON DELETE CASCADE,
+    parent_id TEXT REFERENCES discussion_posts(id) ON DELETE CASCADE,
+    user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+    body_enc TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT
+  );
+  CREATE INDEX idx_posts_topic ON discussion_posts(topic_id, created_at);
+  ALTER TABLE company_counters ADD COLUMN topic_seq INTEGER NOT NULL DEFAULT 0;
+  `,
 ];
 
 function migrate() {

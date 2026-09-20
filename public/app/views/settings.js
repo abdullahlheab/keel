@@ -54,12 +54,18 @@ async function renderProfile(section, ctx) {
 
 // ---------- security ----------
 async function renderSecurity(section, ctx) {
-  const sessions = await api.get('/api/auth/me/sessions');
+  const [sessions, keys] = await Promise.all([api.get('/api/auth/me/sessions'), api.get('/api/keys')]);
+  const myActiveKeys = keys.items.filter((k) => k.state === 'active' && k.userId === state.user.id);
   const pwForm = h('form', { class: 'form-grid', novalidate: true },
     field({ label: 'Current password', name: 'currentPassword', required: true, input: input({ type: 'password', autocomplete: 'current-password', required: true }) }),
-    field({ label: 'New password', name: 'newPassword', required: true, input: input({ type: 'password', autocomplete: 'new-password', required: true, minlength: 10 }), hint: 'At least 10 characters. Changing it signs out every other device.' }),
+    field({ label: 'New password', name: 'newPassword', required: true, input: input({ type: 'password', autocomplete: 'new-password', required: true, minlength: 10 }), hint: 'At least 10 characters. Changing it signs out every other device and revokes your API keys.' }),
     formActions(h('button', { class: 'btn btn-primary', type: 'submit' }, 'Change password')));
-  handleSubmit(pwForm, async (data) => { await api.post('/api/auth/me/password', data); toast('Password changed. Other devices were signed out.'); pwForm.reset(); ctx.refresh(); });
+  handleSubmit(pwForm, async (data) => {
+    const res = await api.post('/api/auth/me/password', data);
+    const n = res.revokedKeys || 0;
+    toast(`Password changed. Other devices were signed out.${n ? ` ${n} API key${n === 1 ? '' : 's'} revoked.` : ''}`);
+    pwForm.reset(); ctx.refresh();
+  });
 
   const mfaOn = state.user.totpEnabled;
   const mfaCard = sectionCard('Two-factor authentication', 'A code from your phone is required at sign-in, even if someone learns your password.',
@@ -74,7 +80,17 @@ async function renderSecurity(section, ctx) {
       s.current ? null : button('Revoke', { size: 'sm', onclick: async () => { await api.del(`/api/auth/me/sessions/${s.id}`); toast('Session revoked'); ctx.refresh(); } })))),
     sessions.items.length > 1 ? h('div', { style: { marginTop: '12px' } }, button('Sign out all other devices', { variant: 'danger', size: 'sm', onclick: async () => { const r = await api.post('/api/auth/me/sessions/revoke-others'); toast(`${r.revoked} session${r.revoked === 1 ? '' : 's'} revoked`); ctx.refresh(); } })) : null);
 
-  mount(section, mfaCard, sectionCard('Password', null, pwForm), sessionsCard);
+  const keysCard = sectionCard('API keys', 'Keys act as you, without a browser session, until they are revoked or expire.',
+    myActiveKeys.length
+      ? h('div', {}, myActiveKeys.map((k) => h('div', { class: 'session-row' },
+        icon('key', { size: 16 }),
+        h('div', { class: 'info' }, h('div', {}, h('b', {}, k.name), badge(k.scope === 'write' ? 'Read & write' : 'Read only', k.scope === 'write' ? 'badge-accent' : '')),
+          h('div', { class: 'small muted' }, `${k.lastUsedAt ? `last used ${relative(k.lastUsedAt)}` : 'never used'}${k.expiresAt ? ` · expires ${date(k.expiresAt)}` : ''}`)),
+        button('Revoke', { size: 'sm', onclick: async () => { await api.del(`/api/keys/${k.id}`); toast('API key revoked'); ctx.refresh(); } }))))
+      : h('p', { class: 'small muted' }, 'You have no active keys.'),
+    h('div', { style: { marginTop: '12px' } }, h('a', { class: 'small', href: '/developers' }, 'Manage keys on the API tab')));
+
+  mount(section, mfaCard, sectionCard('Password', null, pwForm), sessionsCard, keysCard);
 }
 
 function describeUa(ua = '') {

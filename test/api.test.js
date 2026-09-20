@@ -342,7 +342,8 @@ test('two-factor: setup, enable, login challenge, recovery code, disable', async
   await cofounder.post('/api/auth/login', { email: 'sam@example.com', password: 'another-long-password' });
   const reused = await cofounder.post('/api/auth/mfa', { code: enable.data.recoveryCodes[0] });
   assert.equal(reused.status, 401, 'recovery codes are single use');
-  await cofounder.post('/api/auth/mfa', { code: totpCode(setup.data.secret) });
+  // A second recovery code, not the earlier TOTP code: that counter has been spent, see mfa.test.js.
+  await cofounder.post('/api/auth/mfa', { code: enable.data.recoveryCodes[1] });
 
   const disable = await cofounder.post('/api/auth/me/mfa/disable', { password: 'another-long-password', code: totpCode(setup.data.secret) });
   assert.equal(disable.status, 200);

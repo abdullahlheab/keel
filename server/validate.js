@@ -29,7 +29,9 @@ function checkField(name, rule, raw, errors) {
       let v = rule.trim === false ? raw : raw.trim();
       if (rule.lower) v = v.toLowerCase();
       if (v === '') {
+        // Declaring a minimum length means empty is not a way to clear the field either.
         if (rule.required) { errors[name] = 'Required'; return undefined; }
+        if (rule.min) { errors[name] = `Must be at least ${rule.min} characters`; return undefined; }
         return rule.nullable === false ? '' : null;
       }
       if (rule.min && v.length < rule.min) { errors[name] = `Must be at least ${rule.min} characters`; return undefined; }
@@ -100,8 +102,11 @@ export function validate(schema, body, { partial = false } = {}) {
   const errors = {};
   const out = {};
   for (const [name, rule] of Object.entries(schema)) {
+    // A partial update skips whatever was not sent. Anything that WAS sent still has to satisfy the
+    // rule, `required` included: emptying a required field is an error, not a licence to store null
+    // in a NOT NULL column.
     if (partial && !(name in body)) continue;
-    const v = checkField(name, partial ? { ...rule, required: false } : rule, body[name], errors);
+    const v = checkField(name, rule, body[name], errors);
     if (v !== undefined) out[name] = v;
   }
   if (Object.keys(errors).length) throw new HttpError(400, 'Please fix the highlighted fields', { fields: errors });

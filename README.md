@@ -2,7 +2,7 @@
 
 Keel keeps a small company steady.
 
-A self-hosted workspace for a small company: **projects, expenses with receipts, a company-wide spending summary, a Kanban task board, an activity log, and team accounts** — with everything sensitive encrypted at rest.
+A self-hosted workspace for a small company: **projects, expenses with receipts, a company-wide spending summary, a Kanban task board, a discussion room, an activity log, and team accounts** — with everything sensitive encrypted at rest.
 
 Built for two founders who want one place that answers "what are we working on, what did it cost, and who paid?" without handing the data to a third party.
 
@@ -15,19 +15,20 @@ Built for two founders who want one place that answers "what are we working on, 
 | **Expenses** | Amount, vendor, category, project, who paid, status (pending / paid / reimbursed), recurring tag, notes, encrypted receipt uploads, CSV export |
 | **Summary** | Totals by month / project / category / payer / vendor, budget meters, recurring monthly cost, pending reimbursements |
 | **Task board** | Backlog → To do → In progress → In review → Done, drag and drop, priorities, labels, due dates, checklists, comments, `KEY-12` task ids, list view |
-| **Multi-select** | Explorer-style: Ctrl/Shift+click or hover checkboxes, Ctrl+A, then right-click (or the floating bar) to move, assign, reprioritise, relabel, duplicate, copy or delete many tasks at once; drag a selection between columns; same for expenses (status, category, project, payer, export, delete) |
+| **Discussion room** | A forum for the things that do not belong on the board: topics by category (general, announcement, question, idea, decision), threaded replies, mark-the-answer, pin, lock, resolve and archive, optional link to a project, `KEY-D4` topic ids |
+| **Multi-select** | Explorer-style: Ctrl/Shift+click or hover checkboxes, Ctrl+A, then right-click (or the floating bar) to move, assign, reprioritise, relabel, duplicate, copy or delete many tasks at once; drag a selection between columns; same for expenses (status, category, project, payer, export, delete) and discussion topics (category, state, project, pin, lock, delete) |
 | **Activity** | Who changed what and when, across the whole company |
 | **API** | REST API at `/api/v1` with personal API keys (read-only or read & write, optional expiry), OpenAPI document, in-app docs with examples and a key tester |
 
 ## Security model
 
-- **Field-level encryption (AES-256-GCM).** Project names and descriptions, expense amounts, vendors, descriptions and notes, task titles, descriptions, labels, checklists and comments, activity summaries, and receipt files are encrypted before they are written to SQLite. The database file alone is useless without the key.
+- **Field-level encryption (AES-256-GCM).** Project names and descriptions, expense amounts, vendors, descriptions and notes, task titles, descriptions, labels, checklists and comments, discussion topics and every reply, activity summaries, and receipt files are encrypted before they are written to SQLite. The database file alone is useless without the key.
 - **Key separation.** The key lives in `.env` (`ENCRYPTION_KEY`), never in the database. Back it up in a password manager. *If you lose the key, the data is gone.*
 - **Passwords** are hashed with scrypt (N=2^15, per-user 32-byte salt). Login is rate-limited and accounts lock for 15 minutes after 10 failures.
 - **Sessions** are random 256-bit tokens stored only as SHA-256 hashes, in `HttpOnly` / `SameSite=Lax` cookies (`Secure` when served over HTTPS). Changing your password revokes every other session.
 - **Invites** are single-use, expire after 7 days, can be pinned to an email address, and are stored as hashes.
 - **CSRF and headers.** Mutating requests require a custom header that cross-origin pages cannot send; a strict Content-Security-Policy, `nosniff`, frame and referrer policies, and HSTS (behind HTTPS) are set on every response.
-- **Invite-only by default.** After the first account is created, nobody else can self-register; they need an invite link (`ALLOW_OPEN_SIGNUP=true` changes this).
+- **Invite-only.** The very first visitor sets up the workspace and becomes the owner. After that the app offers no way to create a second company — the sign-in page only points newcomers at an invite link, and `/register` says "invite only". `ALLOW_OPEN_SIGNUP=true` reopens the `/api/auth/register` endpoint for scripted setup, but never puts a button back in the UI.
 - **Least privilege.** Members can only edit expenses they added or paid; admins/owners can edit everything; only owners can grant the owner role; the last owner cannot leave or be demoted.
 
 ## Quick start (local)
@@ -85,13 +86,13 @@ All settings live in `.env` (see `.env.example`):
 | `PORT` / `HOST` | `3000` / `127.0.0.1` | Use `HOST=0.0.0.0` to accept connections from other machines or Docker |
 | `TRUST_PROXY` | `false` | `true` when behind Caddy / nginx / a PaaS load balancer |
 | `SECURE_COOKIES` | `false` | Force the `Secure` cookie flag (set `true` in production) |
-| `ALLOW_OPEN_SIGNUP` | `false` | Let anyone create a new company after the first one exists |
+| `ALLOW_OPEN_SIGNUP` | `false` | Let `POST /api/auth/register` create another company after the first one exists. For scripted setup and tests; the UI never exposes it |
 | `DATA_DIR` | `./data` | Where `tracker.sqlite` and encrypted receipts live |
 | `APP_URL` | request origin | Public URL used in invite links |
 
 ## API
 
-Everything in the app is available over a REST API at `/api/v1`, so scripts, CI pipelines, Zapier, n8n or a spreadsheet can read and change projects, tasks and expenses.
+Everything in the app is available over a REST API at `/api/v1`, so scripts, CI pipelines, Zapier, n8n or a spreadsheet can read and change projects, tasks, discussions and expenses. Anything you can do to company data in the UI, a key can do over HTTPS — that parity is a rule, not a goal.
 
 1. In the app open **API** in the sidebar and create a key. Choose *read only* if the tool never needs to change anything, and an expiry if you can. The key is shown once; only its SHA-256 hash is stored.
 2. Send it as a bearer token:
@@ -124,6 +125,7 @@ node scripts/keel.js whoami
 node scripts/keel.js get tasks?status=todo
 node scripts/keel.js post tasks '{"title":"Call the bank","priority":"high"}'
 node scripts/keel.js patch tasks/ACME-12 '{"status":"done"}'
+node scripts/keel.js post discussions '{"title":"Do we still need staging?","category":"decision"}'
 node scripts/keel.js logout
 ```
 
@@ -132,7 +134,7 @@ This is also the safe way to let an AI assistant or another tool on your machine
 How it is secured:
 
 - A key acts as the person who created it, with their role, inside one company. If they are removed, their keys stop working. Admins can see and revoke everyone's keys; members only their own.
-- `/api/v1` accepts API keys only and ignores browser cookies, so it has no CSRF surface. Keys cannot reach account, member, invite or key-management endpoints.
+- `/api/v1` accepts API keys only and ignores browser cookies, so it has no CSRF surface. Two things are deliberately out of reach of a key, both about identity rather than data: **creating keys** (that needs your password, so a key can never mint another key) and **adding, removing or re-roling people** (an invite link outlives the key that made it).
 - Read-only keys are limited to GET. Each key is rate-limited to 300 requests per minute, and usage (last used, IP, request count) is shown in the app.
 - Every change made through a key appears in the activity log marked with the key's name.
 
@@ -162,7 +164,7 @@ server/            Express 5 API (ESM, no build step)
   crypto.js        AES-256-GCM, scrypt, tokens, TOTP
   db.js            SQLite (node:sqlite) + migrations
   middleware/      sessions, roles, CSRF, rate limits, security headers
-  routes/          auth, company, projects, expenses, tasks, activity
+  routes/          auth, company, projects, expenses, tasks, discussions, activity
 public/            Vanilla-JS single-page app (no framework, no bundler)
   app/views/       one module per screen
   app/components/  modal, toast, forms, charts, drag & drop

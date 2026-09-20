@@ -88,4 +88,12 @@ export const emailLimiter = rateLimit({
   key: (req) => `email:${String(req.body?.email || '').toLowerCase()}`,
   message: 'Too many attempts for this account. Try again in 15 minutes.',
 });
+// Keyed on the account, not the IP: a pending sign-in can otherwise be retried from a fresh
+// address, or restarted with a new session, to reset the per-session attempt counter.
+export const mfaLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: TEST ? 10000 : 20,
+  key: (req) => `mfa:${req.user?.id || req.ip}`,
+  message: 'Too many two-factor attempts for this account. Try again in 15 minutes.',
+});
 export const apiLimiter = rateLimit({ windowMs: 60 * 1000, max: 600 });

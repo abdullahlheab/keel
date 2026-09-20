@@ -186,8 +186,14 @@ router.get('/expenses/export.csv', (req, res) => {
   const projects = new Map(listProjects(req.company.id).map((p) => [p.id, p.name]));
   const categories = new Map(all('SELECT id, name FROM categories WHERE company_id = ?', req.company.id).map((c) => [c.id, c.name]));
   const members = new Map(getMembers(req.company.id).map((m) => [m.id, m.name]));
+  // A cell that starts with = + - @ (or a tab/carriage return, which spreadsheets strip before they
+  // decide) is executed as a formula by Excel, Sheets and LibreOffice. An apostrophe forces it to be
+  // text. Plain numbers are exempt, so a negative amount stays a number rather than becoming text.
+  const FORMULA_LEAD = /^[=+\-@\t\r]/;
+  const PLAIN_NUMBER = /^-?\d+(?:\.\d+)?$/;
   const esc = (v) => {
-    const s = v == null ? '' : String(v);
+    let s = v == null ? '' : String(v);
+    if (FORMULA_LEAD.test(s) && !PLAIN_NUMBER.test(s)) s = `'${s}`;
     return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
   };
   const lines = [['Date', 'Amount', 'Currency', 'Vendor', 'Description', 'Category', 'Project', 'Paid by', 'Status', 'Payment method', 'Recurring', 'Notes'].join(',')];

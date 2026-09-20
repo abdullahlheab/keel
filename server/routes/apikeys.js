@@ -1,10 +1,11 @@
 // Managing API keys from the signed-in app (session auth only, never reachable with an API key).
 import { Router } from 'express';
 import { db, now, one, all } from '../db.js';
-import { uid, randomToken, sha256 } from '../crypto.js';
+import { uid, randomToken, sha256, verifyPassword } from '../crypto.js';
 import { validate, rules } from '../validate.js';
 import { HttpError, notFound, forbidden } from '../middleware/errors.js';
 import { hasRole } from '../middleware/auth.js';
+import { authLimiter } from '../middleware/security.js';
 import { KEY_PREFIX } from '../middleware/apikey.js';
 import { logActivity } from '../services/activity.js';
 
@@ -37,12 +38,18 @@ router.get('/keys', (req, res) => {
   res.json({ items: visible.map(keyRow), canSeeAll: hasRole(req, 'admin') });
 });
 
-router.post('/keys', (req, res) => {
+// The password is asked for again here: a key outlives the session that made it, so a hijacked
+// session must not be able to mint one quietly.
+router.post('/keys', authLimiter, async (req, res) => {
   const body = validate({
     name: rules.string({ required: true, min: 1, max: 60 }),
     scope: rules.enum(['read', 'write'], { default: 'write' }),
     expiresInDays: rules.int({ min: 1, max: 3650 }),
+    password: rules.string({ required: true, max: 200, trim: false }),
   }, req.body);
+  if (!(await verifyPassword(body.password, req.user.password_hash))) {
+    throw new HttpError(400, 'Please fix the highlighted fields', { fields: { password: 'Incorrect password' } });
+  }
   const active = one("SELECT count(*) AS c FROM api_keys WHERE company_id = ? AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > ?)", req.company.id, now()).c;
   if (active >= MAX_ACTIVE_KEYS) throw new HttpError(409, `A company can have at most ${MAX_ACTIVE_KEYS} active API keys. Revoke one first.`);
 

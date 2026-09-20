@@ -10,6 +10,8 @@ const ROUTES = [
   ['expenses', '/expenses'],
   ['summary', '/expenses/summary'],
   ['board', '/board'],
+  ['discussions', '/discussions'],
+  ['discussion', '/discussions/:id'],
   ['activity', '/activity'],
   ['developers', '/developers'],
   ['settings', '/settings'],

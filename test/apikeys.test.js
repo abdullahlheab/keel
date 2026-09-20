@@ -27,13 +27,13 @@ before(async () => {
 after(async () => { await srv.close(); });
 
 test('keys are created from the app, shown once, and stored only as a hash', async () => {
-  const w = await owner.post('/api/keys', { name: 'CI bot', scope: 'write' });
+  const w = await owner.post('/api/keys', { name: 'CI bot', scope: 'write', password: 'first-long-password' });
   assert.equal(w.status, 201, JSON.stringify(w.data));
   assert.match(w.data.secret, /^keel_[A-Za-z0-9_-]{40,}$/);
   assert.equal(w.data.key.scope, 'write');
   assert.ok(w.data.secret.startsWith(w.data.key.prefix));
   writeKey = w.data.secret; writeKeyId = w.data.key.id;
-  readKey = (await owner.post('/api/keys', { name: 'Dashboard', scope: 'read', expiresInDays: 30 })).data.secret;
+  readKey = (await owner.post('/api/keys', { name: 'Dashboard', scope: 'read', expiresInDays: 30, password: 'first-long-password' })).data.secret;
 
   const list = await owner.get('/api/keys');
   assert.equal(list.data.items.length, 2);
@@ -42,7 +42,7 @@ test('keys are created from the app, shown once, and stored only as a hash', asy
 
   const row = db.prepare('SELECT key_hash FROM api_keys WHERE id = ?').get(writeKeyId);
   assert.match(row.key_hash, /^[0-9a-f]{64}$/);
-  const bad = await owner.post('/api/keys', { name: '', scope: 'admin' });
+  const bad = await owner.post('/api/keys', { name: '', scope: 'admin', password: 'first-long-password' });
   assert.equal(bad.status, 400);
 });
 
@@ -138,7 +138,7 @@ test('a key cannot manage keys, accounts or members', async () => {
 });
 
 test('a key carries the role of the person who made it', async () => {
-  const created = await member.post('/api/keys', { name: 'Milo script', scope: 'write' });
+  const created = await member.post('/api/keys', { name: 'Milo script', scope: 'write', password: 'second-long-password' });
   memberKey = created.data.secret;
   const mine = await member.get('/api/keys');
   assert.equal(mine.data.canSeeAll, false);
@@ -154,7 +154,7 @@ test('a key carries the role of the person who made it', async () => {
 });
 
 test('revoked, expired and orphaned keys stop working', async () => {
-  const temp = await owner.post('/api/keys', { name: 'Temp', scope: 'read', expiresInDays: 1 });
+  const temp = await owner.post('/api/keys', { name: 'Temp', scope: 'read', expiresInDays: 1, password: 'first-long-password' });
   assert.equal((await apiClient(temp.data.secret).get('/api/v1/me')).status, 200);
   db.prepare('UPDATE api_keys SET expires_at = ? WHERE id = ?').run(new Date(Date.now() - 1000).toISOString(), temp.data.key.id);
   const expired = await apiClient(temp.data.secret).get('/api/v1/me');
@@ -190,4 +190,28 @@ test('the OpenAPI document is public and CORS preflights succeed', async () => {
   assert.equal(pre.status, 204);
   assert.equal(pre.headers.get('access-control-allow-origin'), '*');
   assert.match(pre.headers.get('access-control-allow-headers'), /Authorization/);
+});
+
+// Runs last on purpose: it changes the owner's password, which revokes every key made above.
+test('creating a key needs the password, and changing the password revokes every key', async () => {
+  const wrong = await owner.post('/api/keys', { name: 'No entry', scope: 'write', password: 'not-the-password' });
+  assert.equal(wrong.status, 400);
+  assert.ok(wrong.data.fields && wrong.data.fields.password, 'the password field is flagged');
+  const missing = await owner.post('/api/keys', { name: 'No entry', scope: 'write' });
+  assert.equal(missing.status, 400, 'a key cannot be minted without re-entering the password');
+
+  const made = await owner.post('/api/keys', { name: 'Survivor', scope: 'write', password: 'first-long-password' });
+  assert.equal(made.status, 201, JSON.stringify(made.data));
+  assert.equal((await apiClient(made.data.secret).get('/api/v1/me')).status, 200);
+
+  const changed = await owner.post('/api/auth/me/password', { currentPassword: 'first-long-password', newPassword: 'third-long-password' });
+  assert.equal(changed.status, 200, JSON.stringify(changed.data));
+  assert.ok(changed.data.revokedKeys >= 1, 'the reply says how many keys were revoked');
+
+  const dead = await apiClient(made.data.secret).get('/api/v1/me');
+  assert.equal(dead.status, 401, 'a key must not outlive the password that made it');
+  assert.match(dead.data.error, /revoked/i);
+
+  const feed = await owner.get('/api/activity?entityType=apikey');
+  assert.ok(feed.data.items.some((i) => /because the password was changed/.test(i.summary)), 'the revocation is in the activity log');
 });

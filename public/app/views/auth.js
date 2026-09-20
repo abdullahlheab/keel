@@ -13,7 +13,7 @@ function logo() {
 function page(card) { return h('div', { class: 'auth' }, card); }
 
 export async function renderLogin(root, ctx) {
-  let policy = { openSignup: false, firstRun: false };
+  let policy = { firstRun: false };
   try { policy = await api.get('/api/auth/policy'); } catch { /* ignore */ }
   if (policy.firstRun) { return renderRegister(root, ctx, { firstRun: true }); }
   const form = h('form', { class: 'form-grid', novalidate: true },
@@ -30,14 +30,16 @@ export async function renderLogin(root, ctx) {
     h('h1', {}, 'Welcome back'),
     h('p', { class: 'lead' }, 'Sign in to your company workspace.'),
     form,
-    h('div', { class: 'auth-foot' }, policy.openSignup ? ['New here? ', h('a', { href: '/register' }, 'Create a company')] : 'Need access? Ask a teammate for an invite link.'))));
+    h('div', { class: 'auth-foot' }, 'Need access? Ask a teammate for an invite link.'))));
 }
 
+// Only the very first person sets up a workspace. After that there is no self-serve path:
+// everyone else joins through an invite link, whatever ALLOW_OPEN_SIGNUP says.
 export async function renderRegister(root, ctx, { firstRun = false } = {}) {
   if (!firstRun) {
-    let policy = { openSignup: false };
+    let policy = { firstRun: false };
     try { policy = await api.get('/api/auth/policy'); } catch { /* ignore */ }
-    if (!policy.openSignup) {
+    if (!policy.firstRun) {
       return mount(root, page(h('div', { class: 'card auth-card' }, logo(), h('h1', {}, 'Invite only'),
         h('p', { class: 'lead' }, 'This workspace already has an owner. Ask them for an invite link to join.'),
         h('a', { class: 'btn btn-block', href: '/login' }, 'Back to sign in'))));
@@ -52,17 +54,16 @@ export async function renderRegister(root, ctx, { firstRun = false } = {}) {
     h('div', { class: 'form-row' },
       field({ label: 'Company name', name: 'companyName', input: input({ required: true, placeholder: 'Acme Inc.' }) }),
       field({ label: 'Currency', name: 'currency', input: select(CURRENCIES.map((c) => ({ value: c, label: c })), { value: 'USD' }) })),
-    h('button', { class: 'btn btn-primary btn-lg btn-block', type: 'submit' }, firstRun ? 'Create workspace' : 'Create company'));
+    h('button', { class: 'btn btn-primary btn-lg btn-block', type: 'submit' }, 'Create workspace'));
   handleSubmit(form, async (data) => {
     const res = await api.post('/api/auth/register', data);
     ctx.onSignedIn(res, '/');
   });
   mount(root, page(h('div', { class: 'card auth-card wide' },
     logo(),
-    h('h1', {}, firstRun ? 'Set up your workspace' : 'Create a company'),
-    h('p', { class: 'lead' }, firstRun ? 'You are the first person here. Create the owner account and your company. You can invite your co-founder right after.' : 'Start a new company workspace.'),
-    form,
-    firstRun ? null : h('div', { class: 'auth-foot' }, 'Already have an account? ', h('a', { href: '/login' }, 'Sign in')))));
+    h('h1', {}, 'Set up your workspace'),
+    h('p', { class: 'lead' }, 'You are the first person here. Create the owner account and your company. You can invite your co-founder right after.'),
+    form)));
 }
 
 export async function renderInvite(root, ctx) {

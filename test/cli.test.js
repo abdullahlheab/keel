@@ -26,7 +26,7 @@ before(async () => {
   srv = await bootServer({ ALLOW_OPEN_SIGNUP: 'true' });
   const owner = client(srv.base);
   await owner.post('/api/auth/register', { name: 'Cleo', email: 'cleo@x.com', password: 'first-long-password', companyName: 'Cli Co' });
-  secret = (await owner.post('/api/keys', { name: 'Assistant', scope: 'write' })).data.secret;
+  secret = (await owner.post('/api/keys', { name: 'Assistant', scope: 'write', password: 'first-long-password' })).data.secret;
   configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-cli-'));
   fs.writeFileSync(path.join(configDir, 'credentials.json'), JSON.stringify({ url: srv.base, key: secret }));
 });
@@ -107,4 +107,36 @@ test('login refuses to run without a real terminal, and logout forgets the key',
   const out = await run(['logout']);
   assert.equal(out.code, 0);
   assert.ok(!fs.existsSync(path.join(configDir, 'credentials.json')));
+});
+
+test('the key is sealed on disk, and a plaintext file is resealed on first use', async (t) => {
+  if (process.platform !== 'win32') return t.skip('DPAPI sealing is Windows only');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-seal-'));
+  const file = path.join(dir, 'credentials.json');
+  fs.writeFileSync(file, JSON.stringify({ url: srv.base, key: secret }));
+  assert.match(fs.readFileSync(file, 'utf8'), /keel_/, 'the fixture starts out in plain text');
+
+  const first = await run(['whoami'], { env: { KEEL_CONFIG_DIR: dir } });
+  assert.equal(first.code, 0, first.stderr);
+  const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.equal(saved.protection, 'dpapi-currentuser');
+  assert.ok(!('key' in saved), 'the plaintext field is gone');
+  assert.ok(saved.keyProtected, 'a sealed blob took its place');
+  assert.ok(!/keel_[A-Za-z0-9_-]{20,}/.test(fs.readFileSync(file, 'utf8')), 'no key is left on disk');
+  assert.match(first.stdout, /sealed with DPAPI/);
+
+  const again = await run(['whoami'], { env: { KEEL_CONFIG_DIR: dir } });
+  assert.equal(again.code, 0, again.stderr);
+  assert.match(again.stdout, /Assistant/, 'the sealed key still opens on the next run');
+  assert.ok(!/keel_[A-Za-z0-9_-]{20,}/.test(again.stdout + again.stderr), 'and is never printed');
+});
+
+test('a sealed key from another account is refused with a clear message', async (t) => {
+  if (process.platform !== 'win32') return t.skip('DPAPI sealing is Windows only');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-foreign-'));
+  // A blob this account cannot open: valid base64, but not a DPAPI blob of ours.
+  fs.writeFileSync(path.join(dir, 'credentials.json'), JSON.stringify({ url: srv.base, protection: 'dpapi-currentuser', keyProtected: Buffer.from('not a real dpapi blob').toString('base64') }));
+  const res = await run(['whoami'], { env: { KEEL_CONFIG_DIR: dir } });
+  assert.notEqual(res.code, 0);
+  assert.match(res.stderr, /could not be unsealed|login/i);
 });

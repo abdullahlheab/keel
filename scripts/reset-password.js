@@ -2,7 +2,7 @@
 //   npm run reset-password -- you@company.com                 (prompts for the new password)
 //   npm run reset-password -- you@company.com --disable-2fa   (also removes two-factor, e.g. lost phone)
 //   npm run reset-password -- you@company.com --password "temporary pass"   (non-interactive)
-// Every session for that user is signed out and any lockout is cleared.
+// Every session for that user is signed out, their API keys are revoked, and any lockout is cleared.
 import readline from 'node:readline';
 import { db, now, one } from '../server/db.js';
 import { hashPassword } from '../server/crypto.js';
@@ -48,8 +48,10 @@ try {
   db.prepare('UPDATE users SET password_hash = ?, failed_logins = 0, locked_until = NULL, updated_at = ? WHERE id = ?').run(hash, now(), user.id);
   if (disable2fa) db.prepare('UPDATE users SET totp_enabled = 0, totp_secret_enc = NULL, recovery_codes = NULL WHERE id = ?').run(user.id);
   const sessions = db.prepare('DELETE FROM sessions WHERE user_id = ?').run(user.id).changes;
+  // API keys are not tied to a session, so a reset has to take them out too.
+  const keys = db.prepare('UPDATE api_keys SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL').run(now(), user.id).changes;
   db.exec('COMMIT');
-  console.log(`Password updated for ${user.email}. ${sessions} session(s) signed out.${disable2fa ? ' Two-factor disabled.' : user.totp_enabled ? ' Two-factor is still enabled.' : ''}`);
+  console.log(`Password updated for ${user.email}. ${sessions} session(s) signed out.${keys ? ` ${keys} API key(s) revoked.` : ''}${disable2fa ? ' Two-factor disabled.' : user.totp_enabled ? ' Two-factor is still enabled.' : ''}`);
   console.log('Sign in with the new password, then change it under Settings > Security if it was a temporary one.');
 } catch (err) {
   db.exec('ROLLBACK');

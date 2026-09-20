@@ -1,4 +1,9 @@
 * text=auto eol=lf
 *.cmd text eol=crlf
+# Source is always text, even if a stray control character sneaks in - otherwise git guesses
+# "binary" and the diff becomes unreviewable.
+*.js text diff
+*.css text diff
+*.md text diff
 *.png binary
 *.jpg binary

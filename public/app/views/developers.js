@@ -15,7 +15,7 @@ export async function render(view, ctx) {
   const tab = ctx.query.tab || 'keys';
   const header = pageHeader({
     title: 'API',
-    subtitle: 'Connect scripts, automations and other tools. Anything you can do with projects, tasks and expenses in the app, a key can do over HTTPS.',
+    subtitle: 'Connect scripts, automations and other tools. Anything you can do with projects, tasks, discussions and expenses in the app, a key can do over HTTPS.',
     actions: [button('Create API key', { variant: 'primary', icon: 'plus', onclick: () => openCreateKey(ctx) })],
   });
   const tabBar = tabs([{ id: 'keys', label: 'API keys' }, { id: 'quickstart', label: 'Quick start' }, { id: 'reference', label: 'Reference' }], tab, (t) => setQuery({ tab: t === 'keys' ? null : t }, { replace: false }));
@@ -120,9 +120,10 @@ function openCreateKey(ctx) {
     row(
       field({ label: 'Access', name: 'scope', input: select([{ value: 'write', label: 'Read & write' }, { value: 'read', label: 'Read only' }], { value: 'write' }), hint: 'Read only keys cannot create, change or delete anything.' }),
       field({ label: 'Expires', name: 'expiresInDays', input: select([{ value: '30', label: 'In 30 days' }, { value: '90', label: 'In 90 days' }, { value: '365', label: 'In 1 year' }], { value: '', placeholder: 'Never' }), hint: 'Short-lived keys limit the damage if one leaks.' })),
+    field({ label: 'Your password', name: 'password', required: true, input: input({ type: 'password', autocomplete: 'current-password', required: true }), hint: 'Asked for again because a key keeps working after you sign out.' }),
     formActions(h('button', { class: 'btn', type: 'button', onclick: () => modal.close() }, 'Cancel'), h('button', { class: 'btn btn-primary', type: 'submit' }, 'Create key')));
   handleSubmit(form, async (data) => {
-    const res = await api.post('/api/keys', { name: data.name, scope: data.scope, expiresInDays: data.expiresInDays ? Number(data.expiresInDays) : null });
+    const res = await api.post('/api/keys', { name: data.name, scope: data.scope, expiresInDays: data.expiresInDays ? Number(data.expiresInDays) : null, password: data.password });
     modal.close();
     showSecret(res, ctx);
   });
@@ -156,6 +157,9 @@ function renderQuickstart(body, ctx) {
     { title: 'Create a task on a project', text: 'Only title is required. The response includes the new reference, such as ' + `${key}-42.`, req: { method: 'POST', path: `/projects/${projectId}/tasks`, body: { title: 'Follow up with the design agency', priority: 'high', dueDate: today, labels: ['from-api'] } } },
     { title: 'Change a task', text: `Use the task id or its reference (${key}-12). Send only what changes; send null to clear a field.`, req: { method: 'PATCH', path: `/tasks/${key}-12`, body: { status: 'in_progress', priority: 'urgent' } } },
     { title: 'Comment on a task', text: 'Useful for build results, alerts, or notes from another system.', req: { method: 'POST', path: `/tasks/${key}-12/comments`, body: { body: 'Deployed to production by the release pipeline.' } } },
+    { title: 'Read the discussion room', text: `Topics sort pinned first, then by recent activity. Filter by category, state, project or author.`, req: { path: '/discussions?category=question&state=open' } },
+    { title: 'Start a topic', text: `Categories are general, announcement, question, idea and decision. The response carries a reference such as ${key}-D4.`, req: { method: 'POST', path: '/discussions', body: { title: 'Do we still need the staging environment?', body: 'It costs about 40 a month and nobody has deployed to it since June.', category: 'decision' } } },
+    { title: 'Reply to a topic', text: `Address a topic by id or reference (${key}-D4). Pass parentId to answer another reply.`, req: { method: 'POST', path: `/discussions/${key}-D4/posts`, body: { body: 'Agreed, let us shut it down at the end of the month.' } } },
     { title: 'Log an expense', text: 'amount is a decimal. Look up categoryId, projectId and paidByUserId with /categories, /projects and /members.', req: { method: 'POST', path: '/expenses', body: { amount: 249.99, date: today, vendor: 'Vercel', description: 'Pro plan', status: 'paid' } } },
     { title: 'Spending summary', text: 'Totals, the last 12 months, and breakdowns by project, category, payer and vendor.', req: { path: '/expenses/summary' } },
     { title: 'Poll for changes', text: 'Ask only for tasks changed since your last check. Works on /expenses too.', req: { path: `/tasks?updatedSince=${today}T00:00:00.000Z` } },
@@ -228,7 +232,7 @@ async function renderReference(body) {
           h('tbody', {}, op.parameters.map((prm) => h('tr', {}, h('td', { class: 'mono nowrap' }, prm.name, prm.required ? h('span', { class: 'req' }, ' *') : null), h('td', { class: 'small muted' }, prm.in), h('td', { class: 'small' }, plain(prm.description), prm.schema?.enum ? h('div', { class: 'mono muted' }, prm.schema.enum.join(' | ')) : null))))))) : null,
         bodySchema ? h('div', {}, h('div', { class: 'section-title', style: { margin: '0 0 6px' } }, 'JSON body'), fieldTable(bodySchema)) : null,
         responseSchema?.$ref || itemRef ? h('div', {}, h('div', { class: 'section-title', style: { margin: '0 0 6px' } }, itemRef ? 'Returns { items: [...] } where each item has' : 'Returns'), fieldTable(itemRef || responseSchema)) : null,
-        codeBlock(snippet('curl', { method: method.toUpperCase(), path: path.replace('{id}', path.startsWith('/tasks') ? `${state.company?.key || 'KEY'}-12` : 'ID'), body: bodySchema ? exampleBody(resolve(bodySchema)) : undefined }), { label: 'curl' })));
+        codeBlock(snippet('curl', { method: method.toUpperCase(), path: examplePath(path), body: bodySchema ? exampleBody(resolve(bodySchema)) : undefined }), { label: 'curl' })));
   };
 
   mount(body,
@@ -238,6 +242,14 @@ async function renderReference(body) {
     [...byTag.entries()].map(([tag, ops]) => h('div', { class: 'card', style: { marginBottom: '16px' } },
       h('div', { class: 'card-head' }, h('div', {}, h('h3', {}, tag), h('div', { class: 'small muted' }, plain(spec.tags.find((t) => t.name === tag)?.description)))),
       h('div', {}, ops.map(endpoint)))));
+}
+
+// Fills the {placeholders} in a documented path with something a reader can recognise.
+function examplePath(path) {
+  const key = state.company?.key || 'KEY';
+  return path
+    .replace('{id}', path.startsWith('/tasks') ? `${key}-12` : path.startsWith('/discussions') ? `${key}-D4` : 'ID')
+    .replace(/\{(postId|commentId|userId)\}/, 'ID');
 }
 
 function exampleBody(schema) {
