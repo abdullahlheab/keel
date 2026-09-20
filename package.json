@@ -13,7 +13,8 @@
     "setup": "node scripts/setup.js",
     "backup": "node --disable-warning=ExperimentalWarning scripts/backup.js",
     "test": "node --disable-warning=ExperimentalWarning --test \"test/*.test.js\"",
-    "reset-password": "node --disable-warning=ExperimentalWarning scripts/reset-password.js"
+    "reset-password": "node --disable-warning=ExperimentalWarning scripts/reset-password.js",
+    "keel": "node scripts/keel.js"
   },
   "dependencies": {
     "express": "^5.1.0",

@@ -114,6 +114,21 @@ curl -X PATCH "https://your-keel-host/api/v1/tasks/ACME-12" \
 
 The **API** tab has copy-paste examples in curl, PowerShell, JavaScript and Python, a key tester, and a full endpoint reference. The same reference is served as an OpenAPI 3 document at `/api/v1/openapi.json` for Postman, Insomnia or code generators.
 
+### Command line
+
+`scripts/keel.js` is a small client that keeps the key out of your code, shell history and chat windows. It stores the key in `~/.keel/credentials.json` in your user profile and never prints it.
+
+```bash
+node scripts/keel.js login                                   # asks for the URL and the key (input hidden), checks it, saves it
+node scripts/keel.js whoami
+node scripts/keel.js get tasks?status=todo
+node scripts/keel.js post tasks '{"title":"Call the bank","priority":"high"}'
+node scripts/keel.js patch tasks/ACME-12 '{"status":"done"}'
+node scripts/keel.js logout
+```
+
+This is also the safe way to let an AI assistant or another tool on your machine work with Keel: create a dedicated key (so its changes are labelled in the activity log), run `login` yourself, and let the tool call the CLI. It gets the data, never the key. Revoke the key in the app to cut access instantly.
+
 How it is secured:
 
 - A key acts as the person who created it, with their role, inside one company. If they are removed, their keys stop working. Admins can see and revoke everyone's keys; members only their own.

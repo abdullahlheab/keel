@@ -3,3 +3,6 @@ data
 backups
 .env
 .git
+.env.*
+data-*
+Claude outputs
