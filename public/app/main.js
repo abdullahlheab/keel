@@ -13,6 +13,7 @@ import * as expenses from './views/expenses.js';
 import * as board from './views/board.js';
 import * as activity from './views/activity.js';
 import * as settings from './views/settings.js';
+import * as developers from './views/developers.js';
 
 const root = document.getElementById('app');
 const PUBLIC = new Set(['login', 'register', 'invite', 'mfa']);
@@ -25,6 +26,7 @@ const VIEWS = {
   board: board.render,
   activity: activity.render,
   settings: settings.render,
+  developers: developers.render,
 };
 
 let shellView = null;

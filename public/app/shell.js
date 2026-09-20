@@ -15,6 +15,7 @@ const NAV = [
   { name: 'expenses', href: '/expenses', label: 'Expenses', icon: 'receipt', match: ['expenses', 'summary'] },
   { name: 'board', href: '/board', label: 'Task board', icon: 'board', count: () => state.counts.openTasks },
   { name: 'activity', href: '/activity', label: 'Activity', icon: 'activity' },
+  { name: 'developers', href: '/developers', label: 'API', icon: 'code' },
   { name: 'settings', href: '/settings', label: 'Settings', icon: 'settings' },
 ];
 

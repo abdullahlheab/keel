@@ -61,6 +61,7 @@ export function taskRow(r) {
   return {
     id: r.id,
     number: r.number,
+    ref: r.company_key ? `${r.company_key}-${r.number}` : undefined,
     projectId: r.project_id,
     title: decrypt(r.title_enc),
     description: decrypt(r.description_enc),

@@ -182,6 +182,25 @@ const MIGRATIONS = [
     task_seq INTEGER NOT NULL DEFAULT 0
   );
   `,
+  // 2: API keys (only a SHA-256 hash of each key is stored)
+  `
+  CREATE TABLE api_keys (
+    id TEXT PRIMARY KEY,
+    company_id TEXT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    prefix TEXT NOT NULL,
+    key_hash TEXT NOT NULL UNIQUE,
+    scope TEXT NOT NULL CHECK (scope IN ('read','write')),
+    expires_at TEXT,
+    revoked_at TEXT,
+    last_used_at TEXT,
+    last_used_ip TEXT,
+    request_count INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX idx_api_keys_company ON api_keys(company_id);
+  `,
 ];
 
 function migrate() {

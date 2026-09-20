@@ -57,8 +57,8 @@ router.get('/projects/:id', (req, res) => {
   if (!row) throw notFound('Project');
   const project = withStats(projectRow(row), projectStats(req.company.id));
   const expenses = all('SELECT * FROM expenses WHERE project_id = ? ORDER BY date DESC, created_at DESC', row.id).map(expenseRow);
-  const tasks = all(`SELECT t.*, (SELECT count(*) FROM task_comments c WHERE c.task_id = t.id) AS comment_count
-                     FROM tasks t WHERE t.project_id = ? ORDER BY t.status, t.position`, row.id).map(taskRow);
+  const tasks = all(`SELECT t.*, (SELECT count(*) FROM task_comments c WHERE c.task_id = t.id) AS comment_count, ? AS company_key
+                     FROM tasks t WHERE t.project_id = ? ORDER BY t.status, t.position`, req.company.key, row.id).map(taskRow);
   const byMonth = {};
   const byCategory = {};
   for (const e of expenses) {

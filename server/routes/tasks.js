@@ -40,18 +40,23 @@ function checkRefs(companyId, body) {
   if (body.assigneeUserId && !one('SELECT id FROM memberships WHERE user_id = ? AND company_id = ?', body.assigneeUserId, companyId)) throw new HttpError(400, 'Please fix the highlighted fields', { fields: { assigneeUserId: 'Not a member' } });
 }
 
-const TASK_SELECT = `SELECT t.*, (SELECT count(*) FROM task_comments c WHERE c.task_id = t.id) AS comment_count FROM tasks t`;
+const TASK_SELECT = `SELECT t.*, (SELECT count(*) FROM task_comments c WHERE c.task_id = t.id) AS comment_count,
+  (SELECT co.key FROM companies co WHERE co.id = t.company_id) AS company_key FROM tasks t`;
+const TASK_REF = /^[A-Za-z][A-Za-z0-9]{0,9}-(\d{1,9})$/;
 
-function loadTask(companyId, id) {
-  const row = one(`${TASK_SELECT} WHERE t.id = ? AND t.company_id = ?`, id, companyId);
+// Accepts a task id (UUID) or a human reference such as ACME-12.
+function loadTask(companyId, idOrRef) {
+  const m = TASK_REF.exec(String(idOrRef));
+  const row = m
+    ? one(`${TASK_SELECT} WHERE t.number = ? AND t.company_id = ?`, Number(m[1]), companyId)
+    : one(`${TASK_SELECT} WHERE t.id = ? AND t.company_id = ?`, idOrRef, companyId);
   return row ? taskRow(row) : null;
 }
 
 function taskRef(req, task) { return `${req.company.key}-${task.number}`; }
 
-router.get('/tasks', (req, res) => {
+function listTasks(req, q) {
   let items = all(`${TASK_SELECT} WHERE t.company_id = ? ORDER BY t.status, t.position, t.created_at`, req.company.id).map(taskRow);
-  const q = req.query;
   if (q.project === 'none') items = items.filter((t) => !t.projectId);
   else if (q.project) items = items.filter((t) => t.projectId === q.project);
   if (q.assignee === 'none') items = items.filter((t) => !t.assigneeUserId);
@@ -63,11 +68,31 @@ router.get('/tasks', (req, res) => {
     const needle = String(q.q).toLowerCase();
     items = items.filter((t) => t.title.toLowerCase().includes(needle) || (t.description || '').toLowerCase().includes(needle) || `${req.company.key}-${t.number}`.toLowerCase() === needle);
   }
-  res.json({ items });
+  if (q.updatedSince) items = items.filter((t) => t.updatedAt > String(q.updatedSince));
+  const offset = Math.max(Number(q.offset) || 0, 0);
+  const limit = Number(q.limit) > 0 ? Math.min(Number(q.limit), 1000) : null;
+  const total = items.length;
+  if (offset || limit) items = items.slice(offset, limit ? offset + limit : undefined);
+  return { items, total };
+}
+
+function requireProject(req) {
+  if (!one('SELECT id FROM projects WHERE id = ? AND company_id = ?', req.params.projectId, req.company.id)) throw notFound('Project');
+  return req.params.projectId;
+}
+
+router.get('/tasks', (req, res) => res.json(listTasks(req, req.query)));
+router.get('/projects/:projectId/tasks', (req, res) => res.json(listTasks(req, { ...req.query, project: requireProject(req) })));
+
+router.post('/tasks', (req, res) => res.status(201).json(createTask(req, req.body)));
+router.post('/projects/:projectId/tasks', (req, res) => {
+  const projectId = requireProject(req);
+  const raw = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {};
+  res.status(201).json(createTask(req, { ...raw, projectId }));
 });
 
-router.post('/tasks', (req, res) => {
-  const body = validate(schema, req.body);
+function createTask(req, raw) {
+  const body = validate(schema, raw);
   checkRefs(req.company.id, body);
   const id = uid();
   const ts = now();
@@ -81,8 +106,8 @@ router.post('/tasks', (req, res) => {
     return loadTask(req.company.id, id);
   });
   logActivity({ companyId: req.company.id, userId: req.user.id, action: 'created', entityType: 'task', entityId: id, summary: `${req.user.name} created task ${taskRef(req, task)} "${task.title}"` });
-  res.status(201).json(task);
-});
+  return task;
+}
 
 // ---------- bulk actions on a selection ----------
 const BULK_ACTIONS = ['update', 'move', 'delete', 'duplicate', 'add_label', 'remove_label'];
@@ -257,7 +282,7 @@ router.post('/tasks/:id/comments', (req, res) => {
 });
 
 router.patch('/tasks/:id/comments/:cid', (req, res) => {
-  const c = one('SELECT * FROM task_comments WHERE id = ? AND task_id = ? AND company_id = ?', req.params.cid, req.params.id, req.company.id);
+  const c = one('SELECT * FROM task_comments WHERE id = ? AND task_id = ? AND company_id = ?', req.params.cid, loadTask(req.company.id, req.params.id)?.id ?? req.params.id, req.company.id);
   if (!c) throw notFound('Comment');
   if (c.user_id !== req.user.id && !hasRole(req, 'admin')) throw forbidden();
   const body = validate({ body: rules.string({ required: true, min: 1, max: 5000 }) }, req.body);
@@ -266,7 +291,7 @@ router.patch('/tasks/:id/comments/:cid', (req, res) => {
 });
 
 router.delete('/tasks/:id/comments/:cid', (req, res) => {
-  const c = one('SELECT * FROM task_comments WHERE id = ? AND task_id = ? AND company_id = ?', req.params.cid, req.params.id, req.company.id);
+  const c = one('SELECT * FROM task_comments WHERE id = ? AND task_id = ? AND company_id = ?', req.params.cid, loadTask(req.company.id, req.params.id)?.id ?? req.params.id, req.company.id);
   if (!c) throw notFound('Comment');
   if (c.user_id !== req.user.id && !hasRole(req, 'admin')) throw forbidden();
   db.prepare('DELETE FROM task_comments WHERE id = ?').run(c.id);

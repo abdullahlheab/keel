@@ -11,6 +11,7 @@ const ROUTES = [
   ['summary', '/expenses/summary'],
   ['board', '/board'],
   ['activity', '/activity'],
+  ['developers', '/developers'],
   ['settings', '/settings'],
   ['settings', '/settings/:tab'],
 ];

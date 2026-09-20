@@ -44,6 +44,7 @@ const ICONS = {
   refresh: 'M21 12a9 9 0 1 1-2.6-6.4M21 3v6h-6',
   trendUp: 'm22 7-8.5 8.5-5-5L2 17M16 7h6v6',
   inbox: 'M22 12h-6l-2 3h-4l-2-3H2M5 4h14l3 8v8H2v-8z',
+  code: 'm16 18 6-6-6-6M8 6l-6 6 6 6',
 };
 
 export function icon(name, { size = 18, cls = '' } = {}) {

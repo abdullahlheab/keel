@@ -58,6 +58,7 @@ function applyFilters(items, q) {
   if (q.status) out = out.filter((e) => e.status === q.status);
   if (q.from) out = out.filter((e) => e.date >= q.from);
   if (q.to) out = out.filter((e) => e.date <= q.to);
+  if (q.updatedSince) out = out.filter((e) => e.updatedAt > String(q.updatedSince));
   if (q.q) {
     const needle = String(q.q).toLowerCase();
     out = out.filter((e) => [e.vendor, e.description, e.notes].some((s) => s && s.toLowerCase().includes(needle)));

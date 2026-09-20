@@ -17,6 +17,7 @@ Built for two founders who want one place that answers "what are we working on, 
 | **Task board** | Backlog → To do → In progress → In review → Done, drag and drop, priorities, labels, due dates, checklists, comments, `KEY-12` task ids, list view |
 | **Multi-select** | Explorer-style: Ctrl/Shift+click or hover checkboxes, Ctrl+A, then right-click (or the floating bar) to move, assign, reprioritise, relabel, duplicate, copy or delete many tasks at once; drag a selection between columns; same for expenses (status, category, project, payer, export, delete) |
 | **Activity** | Who changed what and when, across the whole company |
+| **API** | REST API at `/api/v1` with personal API keys (read-only or read & write, optional expiry), OpenAPI document, in-app docs with examples and a key tester |
 
 ## Security model
 
@@ -87,6 +88,38 @@ All settings live in `.env` (see `.env.example`):
 | `ALLOW_OPEN_SIGNUP` | `false` | Let anyone create a new company after the first one exists |
 | `DATA_DIR` | `./data` | Where `tracker.sqlite` and encrypted receipts live |
 | `APP_URL` | request origin | Public URL used in invite links |
+
+## API
+
+Everything in the app is available over a REST API at `/api/v1`, so scripts, CI pipelines, Zapier, n8n or a spreadsheet can read and change projects, tasks and expenses.
+
+1. In the app open **API** in the sidebar and create a key. Choose *read only* if the tool never needs to change anything, and an expiry if you can. The key is shown once; only its SHA-256 hash is stored.
+2. Send it as a bearer token:
+
+```bash
+curl "https://your-keel-host/api/v1/tasks?status=todo" -H "Authorization: Bearer $KEEL_API_KEY"
+```
+
+```bash
+curl -X POST "https://your-keel-host/api/v1/projects/PROJECT_ID/tasks" \
+  -H "Authorization: Bearer $KEEL_API_KEY" -H "Content-Type: application/json" \
+  -d '{"title": "Follow up with the agency", "priority": "high", "labels": ["from-api"]}'
+```
+
+```bash
+curl -X PATCH "https://your-keel-host/api/v1/tasks/ACME-12" \
+  -H "Authorization: Bearer $KEEL_API_KEY" -H "Content-Type: application/json" \
+  -d '{"status": "done"}'
+```
+
+The **API** tab has copy-paste examples in curl, PowerShell, JavaScript and Python, a key tester, and a full endpoint reference. The same reference is served as an OpenAPI 3 document at `/api/v1/openapi.json` for Postman, Insomnia or code generators.
+
+How it is secured:
+
+- A key acts as the person who created it, with their role, inside one company. If they are removed, their keys stop working. Admins can see and revoke everyone's keys; members only their own.
+- `/api/v1` accepts API keys only and ignores browser cookies, so it has no CSRF surface. Keys cannot reach account, member, invite or key-management endpoints.
+- Read-only keys are limited to GET. Each key is rate-limited to 300 requests per minute, and usage (last used, IP, request count) is shown in the app.
+- Every change made through a key appears in the activity log marked with the key's name.
 
 ## Forgot a password?
 

@@ -8,7 +8,7 @@ import { setQuery, navigate } from '../router.js';
 import { openExpenseModal } from './expenses.js';
 import { toast } from '../components/toast.js';
 
-const TYPE_ICON = { project: 'folder', expense: 'receipt', task: 'checkSquare', member: 'users', company: 'settings', category: 'tag' };
+const TYPE_ICON = { project: 'folder', expense: 'receipt', task: 'checkSquare', member: 'users', company: 'settings', category: 'tag', apikey: 'key' };
 const TYPES = [['project', 'Projects'], ['expense', 'Expenses'], ['task', 'Tasks'], ['member', 'Members'], ['company', 'Company']].map(([value, label]) => ({ value, label }));
 
 export async function render(view, ctx) {
@@ -79,5 +79,6 @@ function linkFor(a) {
   if (a.entityType === 'task') return `/board?task=${a.entityId}`;
   if (a.entityType === 'expense') return '/expenses';
   if (a.entityType === 'member') return '/settings/members';
+  if (a.entityType === 'apikey') return '/developers';
   return null;
 }
