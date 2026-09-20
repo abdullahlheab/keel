@@ -9,6 +9,7 @@ import companyRoutes from './routes/company.js';
 import projectRoutes from './routes/projects.js';
 import expenseRoutes from './routes/expenses.js';
 import taskRoutes from './routes/tasks.js';
+import discussionRoutes from './routes/discussions.js';
 import activityRoutes from './routes/activity.js';
 import apiKeyRoutes from './routes/apikeys.js';
 import v1Routes from './routes/v1.js';
@@ -39,6 +40,7 @@ export function createApp() {
   api.use(projectRoutes);
   api.use(expenseRoutes);
   api.use(taskRoutes);
+  api.use(discussionRoutes);
   api.use(activityRoutes);
   api.use(notFoundHandler);
   app.use('/api', (req, res, next) => { res.setHeader('Cache-Control', 'no-store'); next(); }, api);

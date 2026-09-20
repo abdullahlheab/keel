@@ -156,6 +156,20 @@ export const STATUS = {
     paid: { label: 'Paid', cls: 'st-active' },
     reimbursed: { label: 'Reimbursed', cls: 'st-done' },
   },
+  topic: {
+    general: { label: 'General', cls: 'st-planning' },
+    announcement: { label: 'Announcement', cls: 'badge-accent' },
+    question: { label: 'Question', cls: 'st-hold' },
+    idea: { label: 'Idea', cls: 'cat-idea' },
+    decision: { label: 'Decision', cls: 'st-done' },
+  },
+  topicState: {
+    open: { label: 'Open', cls: 'st-planning' },
+    resolved: { label: 'Resolved', cls: 'st-done' },
+    archived: { label: 'Archived', cls: 'st-archived' },
+  },
 };
 export const TASK_STATUSES = ['backlog', 'todo', 'in_progress', 'review', 'done'];
+export const TOPIC_CATEGORIES = ['general', 'announcement', 'question', 'idea', 'decision'];
+export const TOPIC_STATES = ['open', 'resolved', 'archived'];
 export const PAYMENT_METHODS = { card: 'Card', bank: 'Bank transfer', cash: 'Cash', other: 'Other' };

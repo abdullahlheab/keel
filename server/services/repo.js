@@ -22,6 +22,7 @@ export function projectRow(r) {
     description: decrypt(r.description_enc),
     status: r.status,
     color: r.color,
+    categoryId: r.category_id ?? null,
     budgetCents: decryptInt(r.budget_cents_enc),
     startDate: r.start_date,
     endDate: r.end_date,
@@ -84,6 +85,42 @@ export function commentRow(r) {
   return { id: r.id, taskId: r.task_id, userId: r.user_id, body: decrypt(r.body_enc), createdAt: r.created_at, updatedAt: r.updated_at };
 }
 
+export function topicRow(r) {
+  return {
+    id: r.id,
+    number: r.number,
+    ref: r.company_key ? `${r.company_key}-D${r.number}` : undefined,
+    projectId: r.project_id,
+    title: decrypt(r.title_enc),
+    body: decrypt(r.body_enc),
+    category: r.category,
+    state: r.state,
+    pinned: Boolean(r.pinned),
+    locked: Boolean(r.locked),
+    answerPostId: r.answer_post_id,
+    replyCount: r.reply_count ?? undefined,
+    lastPostBy: r.last_post_by ?? undefined,
+    createdBy: r.created_by,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+    editedAt: r.edited_at,
+    lastPostAt: r.last_post_at,
+  };
+}
+
+export function postRow(r, answerPostId = null) {
+  return {
+    id: r.id,
+    topicId: r.topic_id,
+    parentId: r.parent_id,
+    userId: r.user_id,
+    body: decrypt(r.body_enc),
+    isAnswer: Boolean(answerPostId) && r.id === answerPostId,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+  };
+}
+
 // ---------- shared queries ----------
 export function getMembers(companyId) {
   return all(`SELECT u.id, u.name, u.email, u.avatar_color, m.role, m.created_at AS joined_at
@@ -127,9 +164,18 @@ export function projectStats(companyId) {
 }
 
 export function nextTaskNumber(db, companyId) {
-  db.prepare('INSERT INTO company_counters (company_id, task_seq) VALUES (?, 0) ON CONFLICT(company_id) DO NOTHING').run(companyId);
-  db.prepare('UPDATE company_counters SET task_seq = task_seq + 1 WHERE company_id = ?').run(companyId);
-  return db.prepare('SELECT task_seq FROM company_counters WHERE company_id = ?').get(companyId).task_seq;
+  return nextNumber(db, companyId, 'task_seq');
+}
+
+export function nextTopicNumber(db, companyId) {
+  return nextNumber(db, companyId, 'topic_seq');
+}
+
+// Bumps one of the per-company counters and returns the new value. Call inside a transaction.
+function nextNumber(db, companyId, column) {
+  db.prepare('INSERT INTO company_counters (company_id) VALUES (?) ON CONFLICT(company_id) DO NOTHING').run(companyId);
+  db.prepare(`UPDATE company_counters SET ${column} = ${column} + 1 WHERE company_id = ?`).run(companyId);
+  return db.prepare(`SELECT ${column} AS n FROM company_counters WHERE company_id = ?`).get(companyId).n;
 }
 
 export function monthKey(date) { return String(date).slice(0, 7); }

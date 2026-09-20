@@ -45,6 +45,9 @@ const ICONS = {
   trendUp: 'm22 7-8.5 8.5-5-5L2 17M16 7h6v6',
   inbox: 'M22 12h-6l-2 3h-4l-2-3H2M5 4h14l3 8v8H2v-8z',
   code: 'm16 18 6-6-6-6M8 6l-6 6 6 6',
+  pin: 'M12 17v5M9 3h6l-1 6 3 3v2H7v-2l3-3z',
+  reply: 'M9 17H7A4 4 0 0 1 7 9h10M13 5l4 4-4 4',
+  unlock: 'M5 11h14v10H5zM8 11V7a4 4 0 0 1 7.9-.8',
 };
 
 export function icon(name, { size = 18, cls = '' } = {}) {

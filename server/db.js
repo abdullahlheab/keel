@@ -15,6 +15,10 @@ db.exec('PRAGMA synchronous = NORMAL');
 
 export const now = () => new Date().toISOString();
 
+// SQLite has no uuid() builtin. Ids that the API hands back must match the dashed v4 shape
+// randomUUID() produces, because `rules.id()` validates that format on the way back in.
+export const SQL_UUID = `lower(substr(hex(randomblob(4)),1,8) || '-' || substr(hex(randomblob(2)),1,4) || '-4' || substr(hex(randomblob(2)),2,3) || '-' || substr('89ab',1+(abs(random())%4),1) || substr(hex(randomblob(2)),2,3) || '-' || substr(hex(randomblob(6)),1,12))`;
+
 const MIGRATIONS = [
   // 1: initial schema
   `
@@ -200,6 +204,100 @@ const MIGRATIONS = [
     created_at TEXT NOT NULL
   );
   CREATE INDEX idx_api_keys_company ON api_keys(company_id);
+  `,
+  // 3: two-factor hardening - per-session attempt counter and TOTP replay protection
+  `
+  ALTER TABLE sessions ADD COLUMN mfa_attempts INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE users ADD COLUMN totp_last_counter INTEGER;
+  `,
+  // 4: discussion room - forum topics with threaded replies
+  `
+  CREATE TABLE discussion_topics (
+    id TEXT PRIMARY KEY,
+    company_id TEXT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
+    number INTEGER NOT NULL,
+    title_enc TEXT NOT NULL,
+    body_enc TEXT,
+    category TEXT NOT NULL DEFAULT 'general' CHECK (category IN ('general','announcement','question','idea','decision')),
+    state TEXT NOT NULL DEFAULT 'open' CHECK (state IN ('open','resolved','archived')),
+    pinned INTEGER NOT NULL DEFAULT 0,
+    locked INTEGER NOT NULL DEFAULT 0,
+    answer_post_id TEXT,
+    created_by TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    -- set only when the title or body changes, so pinning or resolving never shows up as "edited"
+    edited_at TEXT,
+    last_post_at TEXT NOT NULL,
+    UNIQUE(company_id, number)
+  );
+  CREATE INDEX idx_topics_company ON discussion_topics(company_id, pinned DESC, last_post_at DESC);
+  CREATE INDEX idx_topics_project ON discussion_topics(project_id);
+  CREATE TABLE discussion_posts (
+    id TEXT PRIMARY KEY,
+    company_id TEXT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    topic_id TEXT NOT NULL REFERENCES discussion_topics(id) ON DELETE CASCADE,
+    parent_id TEXT REFERENCES discussion_posts(id) ON DELETE CASCADE,
+    user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+    body_enc TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT
+  );
+  CREATE INDEX idx_posts_topic ON discussion_posts(topic_id, created_at);
+  ALTER TABLE company_counters ADD COLUMN topic_seq INTEGER NOT NULL DEFAULT 0;
+  `,
+  // 5: task status history, so flow and burnup charts can be drawn over time.
+  // project_id is a snapshot rather than a foreign key: deleting a project must not erase the
+  // history of the work that was in it.
+  `
+  CREATE TABLE task_events (
+    id TEXT PRIMARY KEY,
+    company_id TEXT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    project_id TEXT,
+    from_status TEXT,
+    to_status TEXT NOT NULL,
+    at TEXT NOT NULL
+  );
+  CREATE INDEX idx_task_events_company ON task_events(company_id, at);
+  CREATE INDEX idx_task_events_task ON task_events(task_id, at);
+  `,
+  // 6: project categories. A table of their own rather than a flag on `categories`, so a name like
+  // "Marketing" can be both an expense category and a project category.
+  `
+  CREATE TABLE project_categories (
+    id TEXT PRIMARY KEY,
+    company_id TEXT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    color TEXT,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    archived INTEGER NOT NULL DEFAULT 0,
+    UNIQUE(company_id, name)
+  );
+  ALTER TABLE projects ADD COLUMN category_id TEXT REFERENCES project_categories(id) ON DELETE SET NULL;
+
+  -- Give every company that already exists the same starting set a new one gets.
+  INSERT INTO project_categories (id, company_id, name, color, sort_order)
+  SELECT ${SQL_UUID}, c.id, v.name, v.color, v.pos
+  FROM companies c
+  JOIN (SELECT 'Client work' AS name, '#2a78d6' AS color, 0 AS pos
+        UNION ALL SELECT 'Internal', '#4a3aa7', 1
+        UNION ALL SELECT 'Product', '#1baf7a', 2
+        UNION ALL SELECT 'Research', '#eda100', 3
+        UNION ALL SELECT 'Operations', '#898781', 4) v;
+
+  -- Seed history for work that already exists. Creation and completion are the two moments we can
+  -- recover exactly; anything in between was never recorded, so charts before this point show a
+  -- task as open from the day it was created until the day it was finished.
+  INSERT INTO task_events (id, company_id, task_id, project_id, from_status, to_status, at)
+  SELECT lower(hex(randomblob(16))), company_id, id, project_id, NULL,
+         CASE WHEN completed_at IS NOT NULL THEN 'todo' ELSE status END, created_at
+  FROM tasks;
+
+  INSERT INTO task_events (id, company_id, task_id, project_id, from_status, to_status, at)
+  SELECT lower(hex(randomblob(16))), company_id, id, project_id, 'todo', 'done', completed_at
+  FROM tasks WHERE completed_at IS NOT NULL;
   `,
 ];
 

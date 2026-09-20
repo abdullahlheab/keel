@@ -1,11 +1,12 @@
 // Single project: overview with spend and progress, tasks, expenses.
 import { h, mount, money, date, number, STATUS } from '../dom.js';
 import { api } from '../api.js';
-import { state, currency, member, category, isAdmin } from '../state.js';
+import { state, currency, member, category, projectCategory, isAdmin } from '../state.js';
 import { pageHeader, spinner, icon, avatar, button, emptyState, statusBadge, tabs, colorDot, menu, iconButton, kv, priorityBadge } from '../components/ui.js';
 import { confirmDialog } from '../components/modal.js';
 import { toast } from '../components/toast.js';
 import { columnChart, barList, meter, statTile } from '../components/charts.js';
+import { insightsPanel } from './insights.js';
 import { openProjectModal } from './projects.js';
 import { openExpenseModal, expenseTable } from './expenses.js';
 import { openTaskModal, taskTable } from './board.js';
@@ -20,6 +21,7 @@ export async function render(view, ctx) {
   const p = data.project;
   const cur = currency();
   const lead = p.leadUserId ? member(p.leadUserId) : null;
+  const cat = p.categoryId ? projectCategory(p.categoryId) : null;
   const refresh = ctx.refresh;
 
   const actionsMenu = menu(iconButton('more', { title: 'More' }), [
@@ -40,6 +42,7 @@ export async function render(view, ctx) {
     title: [colorDot(p.color, 12), p.name, statusBadge('project', p.status)],
     subtitle: p.description || null,
     actions: [
+      button('Open task board', { icon: 'board', title: `Show only ${p.name} on the board`, onclick: () => navigate(`/board?project=${p.id}`) }),
       button('Task', { icon: 'plus', onclick: () => openTaskModal({ defaults: { projectId: p.id }, onSaved: refresh }) }),
       button('Expense', { variant: 'primary', icon: 'plus', onclick: () => openExpenseModal({ defaults: { projectId: p.id }, onSaved: refresh }) }),
       actionsMenu,
@@ -49,6 +52,7 @@ export async function render(view, ctx) {
   const tabBar = tabs([
     { id: 'overview', label: 'Overview' },
     { id: 'tasks', label: 'Tasks', count: data.tasks.length },
+    { id: 'insights', label: 'Insights' },
     { id: 'expenses', label: 'Expenses', count: data.expenses.length },
   ], tab, (t) => setQuery({ tab: t === 'overview' ? null : t }));
 
@@ -60,6 +64,9 @@ export async function render(view, ctx) {
       h('div', { class: 'card-head' }, h('h3', {}, `${open.length} open · ${done.length} done`), h('span', { class: 'flex', style: { gap: '12px' } }, h('span', { class: 'small muted hide-mobile' }, 'Ctrl+click or right-click for bulk actions'), h('a', { href: `/board?project=${p.id}`, class: 'small' }, 'Open on board'))),
       h('div', { class: 'table-wrap' }, taskTable(data.tasks, { refresh })))
       : emptyState({ icon: 'checkSquare', title: 'No tasks in this project', text: 'Add the first task to start planning.', action: button('New task', { variant: 'primary', icon: 'plus', onclick: () => openTaskModal({ defaults: { projectId: p.id }, onSaved: refresh }) }) });
+  } else if (tab === 'insights') {
+    body = h('div');
+    insightsPanel(body, { projectId: p.id, days: Number(ctx.query.days) || 30, onDays: (d) => setQuery({ days: d === 30 ? null : d }) });
   } else if (tab === 'expenses') {
     body = data.expenses.length ? h('div', { class: 'card' }, h('div', { class: 'table-wrap' }, expenseTable(data.expenses, { onChanged: refresh, hideProject: true }))) : emptyState({ icon: 'receipt', title: 'No expenses yet', text: 'Costs logged against this project appear here.', action: button('Add expense', { variant: 'primary', icon: 'plus', onclick: () => openExpenseModal({ defaults: { projectId: p.id }, onSaved: refresh }) }) });
   } else {
@@ -80,6 +87,7 @@ export async function render(view, ctx) {
       h('div', { class: 'grid grid-2' },
         h('div', { class: 'card' }, h('div', { class: 'card-head' }, h('h3', {}, 'Details')), h('div', { class: 'card-body grid grid-2' },
           kv('Lead', lead ? h('span', { class: 'flex' }, avatar(lead, { size: 'xs' }), lead.name) : 'Unassigned'),
+          kv('Category', cat ? h('a', { href: `/projects?category=${cat.id}`, class: 'flex', style: { gap: '6px', color: 'inherit' } }, colorDot(cat.color, 9), cat.name) : h('span', { class: 'muted' }, 'None')),
           kv('Status', statusBadge('project', p.status)),
           kv('Created', `${date(p.createdAt)} by ${member(p.createdBy)?.name || 'a former member'}`),
           kv('Last updated', date(p.updatedAt)))),

@@ -124,6 +124,146 @@ export function meter({ spentCents, budgetCents, currency, name, color, href }) 
       h('div', { class: 'meter-fill', style: { width: `${Math.min(100, pct)}%` } })));
 }
 
+// ---------- board analytics (the Azure Boards family) ----------
+const dayLabel = (iso) => new Date(`${iso}T00:00:00`).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+
+// Picks roughly `count` evenly spaced indices, always including the last one.
+function tickIndices(len, count = 6) {
+  if (len <= count) return [...Array(len).keys()];
+  const step = (len - 1) / (count - 1);
+  return [...new Set([...Array(count).keys()].map((i) => Math.round(i * step)))];
+}
+
+function axes(root, { padL, padR, padT, plotW, plotH, yMax, W, height, rows, labelOf }) {
+  for (const t of niceTicks(yMax)) {
+    const yy = padT + plotH - (t / (yMax || 1)) * plotH;
+    root.appendChild(svg('line', { x1: padL, x2: W - padR, y1: yy, y2: yy, class: t === 0 ? 'baseline' : 'grid-line' }));
+    root.appendChild(svg('text', { x: padL - 8, y: yy + 4, 'text-anchor': 'end' }, number(t)));
+  }
+  for (const i of tickIndices(rows.length)) {
+    const x = padL + (rows.length === 1 ? plotW / 2 : (i / (rows.length - 1)) * plotW);
+    root.appendChild(svg('text', { x, y: height - 8, 'text-anchor': i === 0 ? 'start' : i === rows.length - 1 ? 'end' : 'middle' }, labelOf(rows[i])));
+  }
+}
+
+// Cumulative flow: one band per column, stacked, oldest status at the bottom.
+// The width of a band is the amount of work sitting in that column on that day.
+export function flowChart({ rows, statuses, labels, colors, height = 230 }) {
+  const W = 680; const padL = 44; const padR = 12; const padT = 12; const padB = 26;
+  const plotW = W - padL - padR; const plotH = height - padT - padB;
+  const yMax = Math.max(1, ...rows.map((r) => statuses.reduce((n, s) => n + (r[s] || 0), 0)));
+  const x = (i) => padL + (rows.length === 1 ? plotW / 2 : (i / (rows.length - 1)) * plotW);
+  const y = (v) => padT + plotH - (v / yMax) * plotH;
+  const root = svg('svg', { viewBox: `0 0 ${W} ${height}`, class: 'flow', role: 'img', 'aria-label': 'Cumulative flow' });
+  axes(root, { padL, padR, padT, plotW, plotH, yMax, W, height, rows, labelOf: (r) => dayLabel(r.date) });
+
+  // Stack from the bottom up, keeping a running total per day.
+  const running = rows.map(() => 0);
+  for (const s of statuses) {
+    const lower = [...running];
+    rows.forEach((r, i) => { running[i] += r[s] || 0; });
+    if (running.every((v, i) => v === lower[i])) continue; // band is empty throughout
+    const top = rows.map((_, i) => `${x(i).toFixed(1)},${y(running[i]).toFixed(1)}`);
+    const bottom = rows.map((_, i) => `${x(i).toFixed(1)},${y(lower[i]).toFixed(1)}`).reverse();
+    // An object style goes through the CSSOM; a style string would be an inline style attribute,
+    // which the Content-Security-Policy blocks.
+    root.appendChild(svg('polygon', { points: [...top, ...bottom].join(' '), class: 'flow-band', style: { '--fill': colors[s] } }));
+  }
+
+  const legend = h('div', { class: 'legend' }, statuses.map((s) => h('span', { class: 'legend-item' }, colorDot(colors[s], 8), labels[s])));
+  const hover = svg('line', { class: 'cursor-line', y1: padT, y2: padT + plotH, x1: 0, x2: 0, hidden: true });
+  root.appendChild(hover);
+  const hit = svg('rect', { x: padL, y: padT, width: plotW, height: plotH, class: 'hit' });
+  hit.addEventListener('mousemove', (e) => {
+    const box = root.getBoundingClientRect();
+    const i = Math.round(((e.clientX - box.left) / box.width * W - padL) / (plotW || 1) * (rows.length - 1));
+    const r = rows[Math.max(0, Math.min(rows.length - 1, i))];
+    if (!r) return;
+    hover.setAttribute('x1', x(rows.indexOf(r))); hover.setAttribute('x2', x(rows.indexOf(r))); hover.hidden = false;
+    showTip(e.clientX, box.top + 8, [h('b', {}, dayLabel(r.date)),
+      ...statuses.filter((s) => r[s]).reverse().map((s) => h('div', { class: 'tip-sub' }, `${labels[s]}: ${r[s]}`))]);
+  });
+  hit.addEventListener('mouseleave', () => { hover.hidden = true; hideTip(); });
+  root.appendChild(hit);
+  return h('div', { class: 'chart' }, root, legend);
+}
+
+// Burnup: total scope against completed work. The gap between the lines is what is left, and a
+// rising scope line is the thing a burndown hides.
+export function burnupChart({ rows, height = 200 }) {
+  const W = 680; const padL = 44; const padR = 12; const padT = 12; const padB = 26;
+  const plotW = W - padL - padR; const plotH = height - padT - padB;
+  const yMax = Math.max(1, ...rows.map((r) => r.total));
+  const x = (i) => padL + (rows.length === 1 ? plotW / 2 : (i / (rows.length - 1)) * plotW);
+  const y = (v) => padT + plotH - (v / yMax) * plotH;
+  const root = svg('svg', { viewBox: `0 0 ${W} ${height}`, class: 'burnup', role: 'img', 'aria-label': 'Burnup' });
+  axes(root, { padL, padR, padT, plotW, plotH, yMax, W, height, rows, labelOf: (r) => dayLabel(r.date) });
+
+  const line = (key, cls) => rows.map((r, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(r[key]).toFixed(1)}`).join(' ');
+  root.appendChild(svg('polygon', {
+    class: 'burnup-gap',
+    points: [...rows.map((r, i) => `${x(i).toFixed(1)},${y(r.total).toFixed(1)}`), ...rows.map((r, i) => `${x(i).toFixed(1)},${y(r.done).toFixed(1)}`).reverse()].join(' '),
+  }));
+  root.appendChild(svg('path', { d: line('total'), class: 'line line-scope' }));
+  root.appendChild(svg('path', { d: line('done'), class: 'line line-done' }));
+
+  const hover = svg('line', { class: 'cursor-line', y1: padT, y2: padT + plotH, x1: 0, x2: 0, hidden: true });
+  root.appendChild(hover);
+  const hit = svg('rect', { x: padL, y: padT, width: plotW, height: plotH, class: 'hit' });
+  hit.addEventListener('mousemove', (e) => {
+    const box = root.getBoundingClientRect();
+    const idx = Math.max(0, Math.min(rows.length - 1, Math.round(((e.clientX - box.left) / box.width * W - padL) / (plotW || 1) * (rows.length - 1))));
+    const r = rows[idx];
+    if (!r) return;
+    hover.setAttribute('x1', x(idx)); hover.setAttribute('x2', x(idx)); hover.hidden = false;
+    showTip(e.clientX, box.top + 8, [h('b', {}, dayLabel(r.date)), h('div', { class: 'tip-sub' }, `Scope: ${r.total}`), h('div', { class: 'tip-sub' }, `Done: ${r.done}`), h('div', { class: 'tip-sub' }, `Remaining: ${r.total - r.done}`)]);
+  });
+  hit.addEventListener('mouseleave', () => { hover.hidden = true; hideTip(); });
+  root.appendChild(hit);
+  return h('div', { class: 'chart' }, root,
+    h('div', { class: 'legend' }, h('span', { class: 'legend-item' }, colorDot('var(--s1)', 8), 'Scope'), h('span', { class: 'legend-item' }, colorDot('var(--good)', 8), 'Done')));
+}
+
+// Plain counted columns, for velocity. The money version above is a different beast.
+export function countColumns({ series, labelOf, valueOf = (s) => s.count, height = 170, tipOf }) {
+  const W = 680; const padL = 40; const padR = 12; const padT = 14; const padB = 26;
+  const plotW = W - padL - padR; const plotH = height - padT - padB;
+  const max = Math.max(1, ...series.map(valueOf));
+  const ticks = niceTicks(max, 3);
+  const yMax = ticks[ticks.length - 1] || 1;
+  const y = (v) => padT + plotH - (v / yMax) * plotH;
+  const slot = plotW / Math.max(1, series.length);
+  const barW = Math.min(28, slot * 0.62);
+  const root = svg('svg', { viewBox: `0 0 ${W} ${height}`, role: 'img', 'aria-label': 'Completed per week' });
+  for (const t of ticks) {
+    const yy = y(t);
+    root.appendChild(svg('line', { x1: padL, x2: W - padR, y1: yy, y2: yy, class: t === 0 ? 'baseline' : 'grid-line' }));
+    root.appendChild(svg('text', { x: padL - 8, y: yy + 4, 'text-anchor': 'end' }, number(t)));
+  }
+  series.forEach((s, i) => {
+    const v = valueOf(s);
+    const cx = padL + slot * i + slot / 2;
+    const hgt = v > 0 ? Math.max(2, (v / yMax) * plotH) : 0;
+    const top = padT + plotH - hgt;
+    const g = svg('g', { class: 'col-group' });
+    if (hgt > 0) {
+      const r = Math.min(4, hgt / 2);
+      g.appendChild(svg('path', { class: 'col', d: `M${cx - barW / 2},${padT + plotH} V${top + r} Q${cx - barW / 2},${top} ${cx - barW / 2 + r},${top} H${cx + barW / 2 - r} Q${cx + barW / 2},${top} ${cx + barW / 2},${top + r} V${padT + plotH} Z` }));
+      g.appendChild(svg('text', { x: cx, y: top - 5, 'text-anchor': 'middle', class: 'val-label' }, String(v)));
+    }
+    if (series.length <= 14 || i % 2 === 0) g.appendChild(svg('text', { x: cx, y: height - 8, 'text-anchor': 'middle' }, labelOf(s)));
+    const hit = svg('rect', { x: padL + slot * i, y: padT, width: slot, height: plotH + padB, class: 'hit' });
+    hit.addEventListener('mouseenter', () => {
+      const rect = hit.getBoundingClientRect();
+      showTip(rect.left + rect.width / 2, rect.top, tipOf ? tipOf(s) : [h('b', {}, String(v))]);
+    });
+    hit.addEventListener('mouseleave', hideTip);
+    g.appendChild(hit);
+    root.appendChild(g);
+  });
+  return h('div', { class: 'chart' }, root);
+}
+
 export function sparkline(values, { width = 96, height = 28 } = {}) {
   const max = Math.max(...values, 1);
   const min = Math.min(...values, 0);

@@ -9,6 +9,8 @@ import { toast } from '../components/toast.js';
 import { enableColumnDnd } from '../components/dnd.js';
 import { createSelection, contextMenu, selectionBar, removeSelectionBar, selectBox } from '../components/selection.js';
 import { setQuery } from '../router.js';
+import { insightsPanel } from './insights.js';
+import { activityList } from './activity.js';
 
 const PRIORITIES = [['urgent', 'Urgent'], ['high', 'High'], ['medium', 'Medium'], ['low', 'Low']].map(([value, label]) => ({ value, label }));
 const STATUS_OPTIONS = TASK_STATUSES.map((s) => ({ value: s, label: STATUS.task[s].label }));
@@ -50,20 +52,34 @@ export async function render(view, ctx) {
     (q.project || q.assignee || q.priority || q.q || q.label) ? button('Clear', { size: 'sm', variant: 'ghost', icon: 'x', onclick: () => setQuery({ project: null, assignee: null, priority: null, q: null, label: null }) }) : null,
     h('div', { class: 'spacer' }),
     h('div', { class: 'segmented' },
-      h('button', { type: 'button', class: listMode ? '' : 'active', onclick: () => setQuery({ view: null }) }, icon('board', { size: 14 }), ' Board'),
-      h('button', { type: 'button', class: listMode ? 'active' : '', onclick: () => setQuery({ view: 'list' }) }, icon('list', { size: 14 }), ' List')));
+      h('button', { type: 'button', class: q.view ? '' : 'active', onclick: () => setQuery({ view: null }) }, icon('board', { size: 14 }), ' Board'),
+      h('button', { type: 'button', class: listMode ? 'active' : '', onclick: () => setQuery({ view: 'list' }) }, icon('list', { size: 14 }), ' List'),
+      h('button', { type: 'button', class: q.view === 'insights' ? 'active' : '', onclick: () => setQuery({ view: 'insights' }) }, icon('trendUp', { size: 14 }), ' Insights')));
 
   const open = all.filter((t) => t.status !== 'done').length;
+  const scoped = q.project && q.project !== 'none' ? state.projects.find((p) => p.id === q.project) : null;
   const header = pageHeader({
     title: 'Task board',
-    subtitle: `${open} open · ${all.length - open} done · ${all.filter((t) => t.status !== 'done' && t.dueDate && t.dueDate < todayIso()).length} overdue · Ctrl+click or right-click to work on several at once`,
-    actions: [button('New task', { variant: 'primary', icon: 'plus', onclick: () => openTaskModal({ defaults: { projectId: q.project && q.project !== 'none' ? q.project : null }, onSaved: ctx.refresh }) })],
+    subtitle: scoped
+      ? `Showing ${scoped.name} only · ${items.filter((t) => t.status !== 'done').length} open of ${items.length}`
+      : `${open} open · ${all.length - open} done · ${all.filter((t) => t.status !== 'done' && t.dueDate && t.dueDate < todayIso()).length} overdue · Ctrl+click or right-click to work on several at once`,
+    crumbs: scoped ? [{ label: 'All projects', href: '/board' }, { label: scoped.name }] : [],
+    actions: [
+      scoped ? button('Show all projects', { icon: 'board', onclick: () => setQuery({ project: null }) }) : null,
+      button('New task', { variant: 'primary', icon: 'plus', onclick: () => openTaskModal({ defaults: { projectId: q.project && q.project !== 'none' ? q.project : null }, onSaved: ctx.refresh }) }),
+    ].filter(Boolean),
   });
 
   const shared = { ctx, tasksById, labels };
-  const body = listMode
-    ? (items.length ? h('div', { class: 'card' }, h('div', { class: 'table-wrap' }, buildTaskTable(sortForList(items), shared))) : emptyState({ icon: 'list', title: 'No tasks match', text: 'Try clearing a filter.' }))
-    : renderBoard(items, shared, all.length === 0);
+  let body;
+  if (q.view === 'insights') {
+    body = h('div');
+    insightsPanel(body, { projectId: q.project || null, days: Number(q.days) || 30, onDays: (d) => setQuery({ days: d === 30 ? null : d }) });
+  } else if (listMode) {
+    body = items.length ? h('div', { class: 'card' }, h('div', { class: 'table-wrap' }, buildTaskTable(sortForList(items), shared))) : emptyState({ icon: 'list', title: 'No tasks match', text: 'Try clearing a filter.' });
+  } else {
+    body = renderBoard(items, shared, all.length === 0);
+  }
   mount(view, header, filters, body);
 
   if (q.task && openedFromQuery !== q.task) {
@@ -455,12 +471,20 @@ export async function openTaskModal({ taskId = null, defaults = {}, onSaved, onC
       await api.del(`/api/tasks/${task.id}`); toast('Task deleted'); changed = true; modal.close();
     } }) : null);
 
+  const historyBox = h('div', { class: 'history-box' }, h('p', { class: 'muted small' }, 'Loading…'));
+  api.get(`/api/activity?entityType=task&entityId=${task.id}&limit=50`)
+    .then((res) => mount(historyBox, res.items.length ? activityList(res.items, { compact: true }) : h('p', { class: 'muted small' }, 'Nothing recorded yet.')))
+    .catch(() => mount(historyBox, h('p', { class: 'muted small' }, 'Could not load the history.')));
+
   const content = h('div', { class: 'task-layout' },
     h('div', { class: 'task-main' },
       title,
       h('div', {}, h('div', { class: 'section-title', style: { margin: '0 0 8px' } }, 'Description'), descBox),
       h('div', {}, h('div', { class: 'section-title', style: { margin: '0 0 8px' } }, 'Checklist'), checklistBox),
-      h('div', {}, h('div', { class: 'section-title', style: { margin: '0 0 10px' } }, `Comments (${task.comments.length})`), commentsBox)),
+      h('div', {}, h('div', { class: 'section-title', style: { margin: '0 0 10px' } }, `Comments (${task.comments.length})`), commentsBox),
+      h('details', { class: 'history' },
+        h('summary', {}, icon('clock', { size: 14 }), 'History'),
+        historyBox)),
     side);
 
   const modal = openModal({ title: ref, size: 'xl', content, headerExtra: h('span', { class: 'flex', style: { gap: '10px' } }, savedHint, button('Copy link', { size: 'sm', icon: 'copy', onclick: async () => { try { await navigator.clipboard.writeText(`${location.origin}/board?task=${task.id}`); toast('Link copied'); } catch { toast('Could not copy', { type: 'error' }); } } })), onClose: () => { if (changed) onSaved?.(task); onClose?.(); } });

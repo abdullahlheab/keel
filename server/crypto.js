@@ -142,14 +142,23 @@ export function totpCode(secretB32, timeMs = Date.now(), step = 30, digits = 6) 
   return String(bin % 10 ** digits).padStart(digits, '0');
 }
 
-export function verifyTotp(secretB32, code, window = 1) {
+// Returns the time-step counter the code matched, or null. Counters at or below `after` are
+// refused, so a code that has already been accepted cannot be used a second time (RFC 6238 s5.2).
+export function verifyTotpCounter(secretB32, code, { window = 1, after = null, timeMs = Date.now(), step = 30 } = {}) {
   const clean = String(code || '').replace(/\s+/g, '');
-  if (!/^\d{6}$/.test(clean)) return false;
-  const now = Date.now();
+  if (!/^\d{6}$/.test(clean)) return null;
+  const current = Math.floor(timeMs / 1000 / step);
   for (let w = -window; w <= window; w++) {
-    if (safeEqual(totpCode(secretB32, now + w * 30_000), clean)) return true;
+    const counter = current + w;
+    if (after !== null && after !== undefined && counter <= after) continue;
+    if (safeEqual(totpCode(secretB32, counter * step * 1000, step), clean)) return counter;
   }
-  return false;
+  return null;
+}
+
+// Boolean form, with no replay check: for confirming a code from an already authenticated user.
+export function verifyTotp(secretB32, code, window = 1) {
+  return verifyTotpCounter(secretB32, code, { window }) !== null;
 }
 
 export function otpauthUrl(issuer, account, secret) {

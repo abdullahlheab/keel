@@ -6,9 +6,11 @@ import { requireApiKey, apiKeyLimiter } from '../middleware/apikey.js';
 import { notFoundHandler } from '../middleware/errors.js';
 import { companyRow, categoryRow, getMembers } from '../services/repo.js';
 import { buildOpenApi } from '../openapi.js';
+import { workspaceRoutes } from './company.js';
 import projectRoutes from './projects.js';
 import expenseRoutes from './expenses.js';
 import taskRoutes from './tasks.js';
+import discussionRoutes from './discussions.js';
 import activityRoutes from './activity.js';
 
 const router = Router();
@@ -57,10 +59,16 @@ router.get('/categories', (req, res) => {
   res.json({ items: all('SELECT * FROM categories WHERE company_id = ? ORDER BY archived, sort_order, name', req.company.id).map(categoryRow) });
 });
 
+// Everything the app can do with company data is reachable here. Two deliberate exceptions, both
+// about identity rather than data: API-key management (/api/keys) stays password-protected so a key
+// can never mint another key, and members/invites stay in the app so a key can never hand a human
+// permanent access that would outlive the key being revoked.
 router.use(projectRoutes);
 router.use(taskRoutes);
+router.use(discussionRoutes);
 router.use(expenseRoutes);
 router.use(activityRoutes);
+router.use(workspaceRoutes);
 router.use(notFoundHandler);
 
 export default router;

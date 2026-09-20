@@ -1,7 +1,7 @@
 // Project list and the create/edit project modal.
 import { h, mount, money, date, centsToInput, debounce } from '../dom.js';
 import { api } from '../api.js';
-import { state, currency, member, isAdmin } from '../state.js';
+import { state, currency, member, isAdmin, projectCategory } from '../state.js';
 import { pageHeader, spinner, icon, avatar, button, emptyState, statusBadge, tabs, colorDot } from '../components/ui.js';
 import { openModal, confirmDialog } from '../components/modal.js';
 import { field, input, textarea, select, moneyInput, handleSubmit, formActions, row } from '../components/forms.js';
@@ -18,11 +18,17 @@ export async function render(view, ctx) {
   const res = await api.get('/api/projects?includeArchived=1');
   const all = res.items;
   state.projects = all;
+  const cat = ctx.query.category || '';
   const shown = all.filter((p) => filter === 'all' ? p.status !== 'archived' : filter === 'archived' ? p.status === 'archived' : ['active', 'planning'].includes(p.status))
-    .filter((p) => !ctx.query.q || p.name.toLowerCase().includes(ctx.query.q.toLowerCase()));
+    .filter((p) => !ctx.query.q || p.name.toLowerCase().includes(ctx.query.q.toLowerCase()))
+    .filter((p) => !cat || (cat === 'none' ? !p.categoryId : p.categoryId === cat));
   const cur = currency();
 
   const search = h('div', { class: 'search' }, icon('search', { size: 15 }), input({ placeholder: 'Search projects', value: ctx.query.q || '', oninput: debounce((e) => setQuery({ q: e.target.value }), 250) }));
+  const categoryFilter = state.projectCategories.length
+    ? select([{ value: 'none', label: 'No category' }, ...state.projectCategories.filter((c) => !c.archived).map((c) => ({ value: c.id, label: c.name }))],
+      { value: cat, placeholder: 'All categories', onchange: (e) => setQuery({ category: e.target.value }) })
+    : null;
 
   const grid = shown.length ? h('div', { class: 'grid grid-auto' }, shown.map((p) => projectCard(p, cur))) : emptyState({
     icon: 'folder',
@@ -35,6 +41,8 @@ export async function render(view, ctx) {
     pageHeader({ title: 'Projects', subtitle: `${all.filter((p) => p.status !== 'archived').length} project${all.length === 1 ? '' : 's'} · ${money(all.reduce((s, p) => s + p.spentCents, 0), cur)} spent in total`, actions: [button('New project', { variant: 'primary', icon: 'plus', onclick: () => openProjectModal({ onSaved: ctx.refresh }) })] }),
     h('div', { class: 'filters' },
       h('div', { class: 'segmented' }, [['active', 'Active'], ['all', 'All'], ['archived', 'Archived']].map(([id, label]) => h('button', { class: id === filter ? 'active' : '', type: 'button', onclick: () => setQuery({ filter: id === 'active' ? null : id }) }, label))),
+      categoryFilter,
+      cat ? button('Clear', { size: 'sm', variant: 'ghost', icon: 'x', onclick: () => setQuery({ category: null }) }) : null,
       h('div', { class: 'spacer' }),
       search),
     grid,
@@ -44,8 +52,10 @@ export async function render(view, ctx) {
 function projectCard(p, cur) {
   const lead = p.leadUserId ? member(p.leadUserId) : null;
   const pct = p.taskTotal ? Math.round((p.taskDone / p.taskTotal) * 100) : 0;
+  const cat = p.categoryId ? projectCategory(p.categoryId) : null;
   const card = h('a', { href: `/projects/${p.id}`, class: 'card card-link project-card' },
     h('div', { class: 'pc-head' }, h('div', { class: 'pc-name' }, p.name), statusBadge('project', p.status)),
+    cat ? h('div', { class: 'pc-cat' }, colorDot(cat.color, 8), cat.name) : null,
     p.description ? h('div', { class: 'pc-desc' }, p.description) : null,
     p.budgetCents != null ? meter({ spentCents: p.spentCents, budgetCents: p.budgetCents, currency: cur, name: 'Budget', color: p.color }) : h('div', { class: 'small text-2' }, h('b', { class: 'tnum' }, money(p.spentCents, cur)), ` spent · ${p.expenseCount} expense${p.expenseCount === 1 ? '' : 's'}`),
     h('div', { class: 'pc-foot' },
@@ -70,13 +80,14 @@ export function openProjectModal({ project = null, onSaved } = {}) {
     field({ label: 'Description', name: 'description', input: textarea({ value: project?.description || '', placeholder: 'What is this project about?' }) }),
     row(
       field({ label: 'Status', name: 'status', input: select(STATUS_OPTIONS, { value: project?.status || 'active' }) }),
-      field({ label: 'Lead', name: 'leadUserId', input: select(state.members.map((m) => ({ value: m.id, label: m.name })), { value: project?.leadUserId || '', placeholder: 'No lead' }) })),
+      field({ label: 'Category', name: 'categoryId', input: select(state.projectCategories.filter((c) => !c.archived || c.id === project?.categoryId).map((c) => ({ value: c.id, label: c.name })), { value: project?.categoryId || '', placeholder: 'No category' }), hint: state.projectCategories.length ? null : 'Add categories under Settings → Categories.' })),
     row(
-      field({ label: `Budget (${currency()})`, name: 'budget', input: h('div', { class: 'money-wrap' }, h('span', { class: 'cur' }, currency()), moneyInput({ value: centsToInput(project?.budgetCents), name: 'budget' })), hint: 'Optional. Used to show spending against plan.' }),
-      h('div', { class: 'field' }, h('label', { class: 'field-label' }, 'Color'), colorField)),
+      field({ label: 'Lead', name: 'leadUserId', input: select(state.members.map((m) => ({ value: m.id, label: m.name })), { value: project?.leadUserId || '', placeholder: 'No lead' }) }),
+      field({ label: `Budget (${currency()})`, name: 'budget', input: h('div', { class: 'money-wrap' }, h('span', { class: 'cur' }, currency()), moneyInput({ value: centsToInput(project?.budgetCents), name: 'budget' })), hint: 'Optional. Used to show spending against plan.' })),
     row(
       field({ label: 'Start date', name: 'startDate', input: input({ type: 'date', value: project?.startDate || '' }) }),
       field({ label: 'Target end date', name: 'endDate', input: input({ type: 'date', value: project?.endDate || '' }) })),
+    h('div', { class: 'field' }, h('label', { class: 'field-label' }, 'Color'), colorField),
     formActions(
       isEdit && isAdmin() ? h('button', { class: 'btn btn-danger left', type: 'button', onclick: async () => {
         const ok = await confirmDialog({ title: `Delete "${project.name}"?`, message: 'Tasks and expenses in this project are kept but become unassigned. Archiving is usually the better choice.', confirmText: 'Delete project', danger: true });

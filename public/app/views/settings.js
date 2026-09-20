@@ -13,7 +13,7 @@ const TABS = [
   { id: 'security', label: 'Security', icon: 'shield' },
   { id: 'company', label: 'Company', icon: 'settings' },
   { id: 'members', label: 'Members & invites', icon: 'users' },
-  { id: 'categories', label: 'Expense categories', icon: 'tag' },
+  { id: 'categories', label: 'Categories', icon: 'tag' },
 ];
 const ROLE_OPTIONS = [['owner', 'Owner'], ['admin', 'Admin'], ['member', 'Member']].map(([value, label]) => ({ value, label }));
 const ROLE_HELP = 'Owners can do everything, including managing other owners. Admins manage members, settings and any record. Members can add and edit their own expenses and work with tasks.';
@@ -54,12 +54,18 @@ async function renderProfile(section, ctx) {
 
 // ---------- security ----------
 async function renderSecurity(section, ctx) {
-  const sessions = await api.get('/api/auth/me/sessions');
+  const [sessions, keys] = await Promise.all([api.get('/api/auth/me/sessions'), api.get('/api/keys')]);
+  const myActiveKeys = keys.items.filter((k) => k.state === 'active' && k.userId === state.user.id);
   const pwForm = h('form', { class: 'form-grid', novalidate: true },
     field({ label: 'Current password', name: 'currentPassword', required: true, input: input({ type: 'password', autocomplete: 'current-password', required: true }) }),
-    field({ label: 'New password', name: 'newPassword', required: true, input: input({ type: 'password', autocomplete: 'new-password', required: true, minlength: 10 }), hint: 'At least 10 characters. Changing it signs out every other device.' }),
+    field({ label: 'New password', name: 'newPassword', required: true, input: input({ type: 'password', autocomplete: 'new-password', required: true, minlength: 10 }), hint: 'At least 10 characters. Changing it signs out every other device and revokes your API keys.' }),
     formActions(h('button', { class: 'btn btn-primary', type: 'submit' }, 'Change password')));
-  handleSubmit(pwForm, async (data) => { await api.post('/api/auth/me/password', data); toast('Password changed. Other devices were signed out.'); pwForm.reset(); ctx.refresh(); });
+  handleSubmit(pwForm, async (data) => {
+    const res = await api.post('/api/auth/me/password', data);
+    const n = res.revokedKeys || 0;
+    toast(`Password changed. Other devices were signed out.${n ? ` ${n} API key${n === 1 ? '' : 's'} revoked.` : ''}`);
+    pwForm.reset(); ctx.refresh();
+  });
 
   const mfaOn = state.user.totpEnabled;
   const mfaCard = sectionCard('Two-factor authentication', 'A code from your phone is required at sign-in, even if someone learns your password.',
@@ -74,7 +80,17 @@ async function renderSecurity(section, ctx) {
       s.current ? null : button('Revoke', { size: 'sm', onclick: async () => { await api.del(`/api/auth/me/sessions/${s.id}`); toast('Session revoked'); ctx.refresh(); } })))),
     sessions.items.length > 1 ? h('div', { style: { marginTop: '12px' } }, button('Sign out all other devices', { variant: 'danger', size: 'sm', onclick: async () => { const r = await api.post('/api/auth/me/sessions/revoke-others'); toast(`${r.revoked} session${r.revoked === 1 ? '' : 's'} revoked`); ctx.refresh(); } })) : null);
 
-  mount(section, mfaCard, sectionCard('Password', null, pwForm), sessionsCard);
+  const keysCard = sectionCard('API keys', 'Keys act as you, without a browser session, until they are revoked or expire.',
+    myActiveKeys.length
+      ? h('div', {}, myActiveKeys.map((k) => h('div', { class: 'session-row' },
+        icon('key', { size: 16 }),
+        h('div', { class: 'info' }, h('div', {}, h('b', {}, k.name), badge(k.scope === 'write' ? 'Read & write' : 'Read only', k.scope === 'write' ? 'badge-accent' : '')),
+          h('div', { class: 'small muted' }, `${k.lastUsedAt ? `last used ${relative(k.lastUsedAt)}` : 'never used'}${k.expiresAt ? ` · expires ${date(k.expiresAt)}` : ''}`)),
+        button('Revoke', { size: 'sm', onclick: async () => { await api.del(`/api/keys/${k.id}`); toast('API key revoked'); ctx.refresh(); } }))))
+      : h('p', { class: 'small muted' }, 'You have no active keys.'),
+    h('div', { style: { marginTop: '12px' } }, h('a', { class: 'small', href: '/developers' }, 'Manage keys on the API tab')));
+
+  mount(section, mfaCard, sectionCard('Password', null, pwForm), sessionsCard, keysCard);
 }
 
 function describeUa(ua = '') {
@@ -203,31 +219,41 @@ async function renderMembers(section, ctx) {
 }
 
 // ---------- categories ----------
+// Expenses and projects each have their own set; the editor is the same for both.
 async function renderCategories(section, ctx) {
+  const [expense, project] = await Promise.all([
+    categorySection(ctx, { path: '/api/company/categories', title: 'Expense categories', blurb: 'Group spending so the summary tells you where the money goes.', placeholder: 'e.g. Payroll', detaches: 'Expenses in this category become uncategorised.' }),
+    categorySection(ctx, { path: '/api/company/project-categories', title: 'Project categories', blurb: 'Group projects by the kind of work they are, so you can filter the list and see where effort goes.', placeholder: 'e.g. Client work', detaches: 'Projects in this category become uncategorised.' }),
+  ]);
+  mount(section, expense, h('div', { style: { height: '16px' } }), project);
+}
+
+async function categorySection(ctx, { path, title, blurb, placeholder, detaches }) {
   const admin = isAdmin();
-  const res = await api.get('/api/company/categories');
+  const res = await api.get(path);
   const list = h('div');
-  const rows = res.items.map((c) => {
-    const nameInput = input({ value: c.name, readOnly: !admin, class: 'input', onblur: async (e) => { const v = e.target.value.trim(); if (v && v !== c.name) { try { await api.patch(`/api/company/categories/${c.id}`, { name: v }); c.name = v; toast('Category renamed'); ctx.refreshCompany(); } catch (err) { toast(err.message, { type: 'error' }); e.target.value = c.name; } } } });
-    const color = admin ? colorInput({ value: c.color || '#898781', onchange: async (e) => { await api.patch(`/api/company/categories/${c.id}`, { color: e.target.value }); ctx.refreshCompany(); } }) : colorDot(c.color, 14);
+  mount(list, res.items.map((c) => {
+    const nameInput = input({ value: c.name, readOnly: !admin, class: 'input', onblur: async (e) => { const v = e.target.value.trim(); if (v && v !== c.name) { try { await api.patch(`${path}/${c.id}`, { name: v }); c.name = v; toast('Category renamed'); ctx.refreshCompany(); } catch (err) { toast(err.message, { type: 'error' }); e.target.value = c.name; } } } });
+    const color = admin ? colorInput({ value: c.color || '#898781', onchange: async (e) => { await api.patch(`${path}/${c.id}`, { color: e.target.value }); ctx.refreshCompany(); } }) : colorDot(c.color, 14);
     return h('div', { class: 'member-row', style: c.archived ? { opacity: .55 } : null },
       color, h('div', { class: 'info' }, nameInput),
       c.archived ? badge('Archived') : null,
-      admin ? button(c.archived ? 'Unarchive' : 'Archive', { size: 'sm', variant: 'ghost', onclick: async () => { await api.patch(`/api/company/categories/${c.id}`, { archived: !c.archived }); await ctx.refreshCompany(); ctx.refresh(); } }) : null,
+      admin ? button(c.archived ? 'Unarchive' : 'Archive', { size: 'sm', variant: 'ghost', onclick: async () => { await api.patch(`${path}/${c.id}`, { archived: !c.archived }); await ctx.refreshCompany(); ctx.refresh(); } }) : null,
       admin ? iconButton('trash', { title: 'Delete category', onclick: async () => {
-        const ok = await confirmDialog({ title: `Delete "${c.name}"?`, message: 'Expenses in this category become uncategorised. Archiving keeps history intact.', confirmText: 'Delete', danger: true });
+        const ok = await confirmDialog({ title: `Delete "${c.name}"?`, message: `${detaches} Archiving keeps history intact.`, confirmText: 'Delete', danger: true });
         if (!ok) return;
-        await api.del(`/api/company/categories/${c.id}`); toast('Category deleted'); await ctx.refreshCompany(); ctx.refresh();
+        await api.del(`${path}/${c.id}`); toast('Category deleted'); await ctx.refreshCompany(); ctx.refresh();
       } }) : null);
-  });
-  mount(list, rows);
+  }));
+  if (!res.items.length) mount(list, h('p', { class: 'muted small' }, 'None yet.'));
+
   let addForm = null;
   if (admin) {
     addForm = h('form', { class: 'flex', novalidate: true, style: { alignItems: 'flex-end', gap: '8px', flexWrap: 'wrap' } },
-      field({ label: 'New category', name: 'name', input: input({ placeholder: 'e.g. Payroll', required: true }) }),
+      field({ label: 'New category', name: 'name', input: input({ placeholder, required: true }) }),
       field({ label: 'Color', name: 'color', input: colorInput({ value: '#2a78d6' }) }),
       h('button', { class: 'btn btn-primary', type: 'submit' }, 'Add'));
-    handleSubmit(addForm, async (data) => { await api.post('/api/company/categories', { name: data.name, color: data.color }); toast('Category added'); await ctx.refreshCompany(); ctx.refresh(); });
+    handleSubmit(addForm, async (data) => { await api.post(path, { name: data.name, color: data.color }); toast('Category added'); await ctx.refreshCompany(); ctx.refresh(); });
   }
-  mount(section, sectionCard('Expense categories', 'Group spending so the summary tells you where the money goes.', list, addForm ? h('div', { class: 'divider' }) : null, addForm));
+  return sectionCard(title, blurb, list, addForm ? h('div', { class: 'divider' }) : null, addForm);
 }

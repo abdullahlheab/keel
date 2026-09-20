@@ -3,7 +3,7 @@ import { Router } from 'express';
 import { db, now, one, all } from '../db.js';
 import { uid, encrypt, encryptInt } from '../crypto.js';
 import { validate, rules } from '../validate.js';
-import { notFound } from '../middleware/errors.js';
+import { HttpError, notFound } from '../middleware/errors.js';
 import { requireRole } from '../middleware/auth.js';
 import { logActivity } from '../services/activity.js';
 import { projectRow, listProjects, projectStats, expenseRow, taskRow, monthKey } from '../services/repo.js';
@@ -20,7 +20,16 @@ const schema = {
   startDate: rules.date(),
   endDate: rules.date(),
   leadUserId: rules.id(),
+  categoryId: rules.id(),
 };
+
+function assertCategory(companyId, categoryId) {
+  if (!categoryId) return null;
+  if (!one('SELECT id FROM project_categories WHERE id = ? AND company_id = ?', categoryId, companyId)) {
+    throw new HttpError(400, 'Please fix the highlighted fields', { fields: { categoryId: 'Unknown project category' } });
+  }
+  return categoryId;
+}
 
 function withStats(project, stats) {
   const s = stats.get(project.id) || { spentCents: 0, expenseCount: 0, taskTotal: 0, taskDone: 0, taskOpen: 0 };
@@ -37,6 +46,8 @@ router.get('/projects', (req, res) => {
   let items = listProjects(req.company.id).map((p) => withStats(p, stats));
   if (req.query.status) items = items.filter((p) => p.status === req.query.status);
   else if (req.query.includeArchived !== '1') items = items.filter((p) => p.status !== 'archived');
+  if (req.query.category === 'none') items = items.filter((p) => !p.categoryId);
+  else if (req.query.category) items = items.filter((p) => p.categoryId === req.query.category);
   res.json({ items });
 });
 
@@ -44,9 +55,9 @@ router.post('/projects', (req, res) => {
   const body = validate(schema, req.body);
   const id = uid();
   const ts = now();
-  db.prepare(`INSERT INTO projects (id, company_id, name_enc, description_enc, status, color, budget_cents_enc, start_date, end_date, lead_user_id, created_by, created_at, updated_at)
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-    .run(id, req.company.id, encrypt(body.name), encrypt(body.description ?? null), body.status, body.color, encryptInt(body.budget ?? null),
+  db.prepare(`INSERT INTO projects (id, company_id, name_enc, description_enc, status, color, category_id, budget_cents_enc, start_date, end_date, lead_user_id, created_by, created_at, updated_at)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run(id, req.company.id, encrypt(body.name), encrypt(body.description ?? null), body.status, body.color, assertCategory(req.company.id, body.categoryId), encryptInt(body.budget ?? null),
       body.startDate ?? null, body.endDate ?? null, assertMember(req.company.id, body.leadUserId), req.user.id, ts, ts);
   logActivity({ companyId: req.company.id, userId: req.user.id, action: 'created', entityType: 'project', entityId: id, summary: `${req.user.name} created project "${body.name}"` });
   res.status(201).json(withStats(projectRow(one('SELECT * FROM projects WHERE id = ?', id)), projectStats(req.company.id)));
@@ -83,8 +94,9 @@ router.patch('/projects/:id', (req, res) => {
   const next = { ...current, ...body };
   if ('budget' in body) next.budgetCents = body.budget;
   if ('leadUserId' in body) next.leadUserId = assertMember(req.company.id, body.leadUserId);
-  db.prepare(`UPDATE projects SET name_enc = ?, description_enc = ?, status = ?, color = ?, budget_cents_enc = ?, start_date = ?, end_date = ?, lead_user_id = ?, updated_at = ? WHERE id = ?`)
-    .run(encrypt(next.name), encrypt(next.description ?? null), next.status, next.color, encryptInt(next.budgetCents ?? null), next.startDate ?? null, next.endDate ?? null, next.leadUserId ?? null, now(), row.id);
+  if ('categoryId' in body) next.categoryId = assertCategory(req.company.id, body.categoryId);
+  db.prepare(`UPDATE projects SET name_enc = ?, description_enc = ?, status = ?, color = ?, category_id = ?, budget_cents_enc = ?, start_date = ?, end_date = ?, lead_user_id = ?, updated_at = ? WHERE id = ?`)
+    .run(encrypt(next.name), encrypt(next.description ?? null), next.status, next.color, next.categoryId ?? null, encryptInt(next.budgetCents ?? null), next.startDate ?? null, next.endDate ?? null, next.leadUserId ?? null, now(), row.id);
   const changed = Object.keys(body);
   const verb = body.status && changed.length === 1 ? `marked project "${next.name}" as ${body.status.replace('_', ' ')}` : `updated project "${next.name}"`;
   logActivity({ companyId: req.company.id, userId: req.user.id, action: 'updated', entityType: 'project', entityId: row.id, summary: `${req.user.name} ${verb}`, meta: { changed } });

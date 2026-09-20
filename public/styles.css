@@ -475,6 +475,72 @@ img, svg { display: block; max-width: 100%; }
 .desc-view.placeholder { color: var(--muted); font-style: italic; }
 .saved-hint { font-size: 12px; color: var(--muted); display: inline-flex; align-items: center; gap: 4px; transition: opacity .3s; }
 
+.pc-cat { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 600; color: var(--text-2); margin-top: -2px; }
+
+/* ---------- per-item history ---------- */
+.history { border-top: 1px solid var(--border); padding-top: 10px; margin-top: 4px; }
+.history > summary { display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 12.5px; font-weight: 600; color: var(--text-2); list-style: none; }
+.history > summary::-webkit-details-marker { display: none; }
+.history > summary::after { content: '▸'; color: var(--muted); transition: transform .12s; }
+.history[open] > summary::after { transform: rotate(90deg); }
+.history > summary:hover { color: var(--text); }
+.history-box { margin-top: 10px; }
+
+/* ---------- board analytics ---------- */
+.chart .flow-band { fill: var(--fill); fill-opacity: .85; stroke: var(--surface); stroke-width: .5; }
+.chart .burnup-gap { fill: var(--s1); fill-opacity: .08; }
+.chart .line { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.chart .line-scope { stroke: var(--s1); }
+.chart .line-done { stroke: var(--good); }
+.chart .cursor-line { stroke: var(--border-strong); stroke-width: 1; stroke-dasharray: 3 3; pointer-events: none; }
+.chart .hit { fill: transparent; }
+
+/* ---------- discussion room ---------- */
+.cat-idea { background: var(--surface-3); color: var(--s7); }
+.topic-list { display: flex; flex-direction: column; overflow: hidden; }
+.topic-row { display: flex; align-items: flex-start; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--border); cursor: pointer; transition: background .1s; }
+.topic-row:last-child { border-bottom: 0; }
+.topic-row:hover { background: var(--surface-2); }
+.topic-row.pinned { background: var(--accent-soft); }
+.topic-row.pinned:hover { background: var(--accent-soft); filter: brightness(.98); }
+.topic-row.selected { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
+.topic-row .sel-cell { padding-top: 3px; opacity: 0; }
+.topic-row:hover .sel-cell, .topic-row.selected .sel-cell, .selecting .topic-row .sel-cell { opacity: 1; }
+.topic-main { flex: 1; min-width: 0; }
+.topic-title { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; font-weight: 600; font-size: 14px; }
+.topic-title .truncate { max-width: 100%; }
+.topic-flag { color: var(--muted); flex: 0 0 auto; }
+.topic-meta { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 3px; font-size: 12px; color: var(--muted); }
+.topic-meta .mono { color: var(--text-2); font-weight: 600; }
+.topic-replies { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font-size: 12.5px; font-weight: 600; font-variant-numeric: tabular-nums; padding-top: 2px; flex: 0 0 auto; }
+.topic-flags { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
+.topic-flags .chip { text-decoration: none; color: inherit; padding: 2px 8px; }
+
+.post { margin-bottom: 12px; }
+.post-head { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 8px; }
+.post-head b { font-weight: 600; font-size: 13.5px; }
+.post-head .badge { vertical-align: middle; }
+/* Owner-only actions stay quiet until you look at the post, but never invisible - a hover-only
+   control cannot be found by touch. The Reply button below is always at full strength. */
+.post-head .btn-icon { opacity: .5; }
+.post:hover .post-head .btn-icon, .post-head .btn-icon:focus-visible, .post-head .btn-icon.is-answer { opacity: 1; }
+.post-head .btn-icon.is-answer { color: var(--good-text); }
+.post-actions { display: flex; gap: 6px; margin-top: 8px; }
+.post-text { white-space: pre-wrap; word-wrap: break-word; font-size: 13.5px; line-height: 1.6; }
+.post-opening { border-left: 3px solid var(--accent); }
+.post-answer { border-left: 3px solid var(--good); background: var(--good-soft); }
+.replies { display: flex; flex-direction: column; }
+.thread { margin-bottom: 4px; }
+.thread-children { margin-left: 28px; padding-left: 14px; border-left: 2px solid var(--border); }
+.thread-children .post { margin-bottom: 8px; }
+.reply-inline { margin-top: 10px; box-shadow: none; }
+.reply-main { margin-top: 8px; }
+
+@media (max-width: 720px) {
+  .thread-children { margin-left: 10px; padding-left: 10px; }
+  .topic-replies { display: none; }
+}
+
 /* ---------- expenses ---------- */
 .amount { font-variant-numeric: tabular-nums; font-weight: 600; white-space: nowrap; }
 .amount.neg { color: var(--good-text); }

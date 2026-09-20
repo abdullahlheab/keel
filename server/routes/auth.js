@@ -5,7 +5,7 @@ import { config } from '../config.js';
 import { db, tx, now, one, all } from '../db.js';
 import {
   uid, hashPassword, verifyPassword, randomToken, sha256, encrypt, decrypt,
-  generateTotpSecret, verifyTotp, otpauthUrl, generateRecoveryCodes, safeEqual,
+  generateTotpSecret, verifyTotp, verifyTotpCounter, otpauthUrl, generateRecoveryCodes, safeEqual,
 } from '../crypto.js';
 import { validate, rules } from '../validate.js';
 import { HttpError, notFound, unauthorized } from '../middleware/errors.js';
@@ -13,7 +13,7 @@ import {
   createSession, destroySession, clearSessionCookie, setSessionCookie,
   requireAuth, requireMfaPending, loadSession,
 } from '../middleware/auth.js';
-import { authLimiter, emailLimiter } from '../middleware/security.js';
+import { authLimiter, emailLimiter, mfaLimiter } from '../middleware/security.js';
 import { logActivity } from '../services/activity.js';
 import { publicUser, companyRow } from '../services/repo.js';
 
@@ -38,9 +38,15 @@ export function makeCompanyKey(name) {
   return key.length >= 2 ? key : (key + 'CO').slice(0, 2);
 }
 
+const DEFAULT_PROJECT_CATEGORIES = [
+  ['Client work', '#2a78d6'], ['Internal', '#4a3aa7'], ['Product', '#1baf7a'], ['Research', '#eda100'], ['Operations', '#898781'],
+];
+
 function seedCategories(companyId) {
   const stmt = db.prepare('INSERT INTO categories (id, company_id, name, color, sort_order) VALUES (?, ?, ?, ?, ?)');
   DEFAULT_CATEGORIES.forEach(([name, color], i) => stmt.run(uid(), companyId, name, color, i));
+  const proj = db.prepare('INSERT INTO project_categories (id, company_id, name, color, sort_order) VALUES (?, ?, ?, ?, ?)');
+  DEFAULT_PROJECT_CATEGORIES.forEach(([name, color], i) => proj.run(uid(), companyId, name, color, i));
 }
 
 function mePayload(user) {
@@ -128,12 +134,20 @@ router.post('/login', authLimiter, emailLimiter, async (req, res) => {
 });
 
 // ---------- second factor ----------
-router.post('/mfa', authLimiter, requireMfaPending, (req, res) => {
+// A half-finished sign-in gets a few tries, then the pending session is thrown away. Without this,
+// the code space is small enough to walk through once the password is known.
+const MFA_MAX_ATTEMPTS = 5;
+
+router.post('/mfa', authLimiter, requireMfaPending, mfaLimiter, (req, res) => {
   const body = validate({ code: rules.string({ required: true, max: 20 }) }, req.body);
   const user = req.user;
   const secret = decrypt(user.totp_secret_enc);
-  let ok = verifyTotp(secret, body.code);
-  if (!ok) {
+  // Anything at or below the last counter we accepted is a replay, even though it is still in the window.
+  const counter = verifyTotpCounter(secret, body.code, { after: user.totp_last_counter });
+  let ok = counter !== null;
+  if (ok) {
+    db.prepare('UPDATE users SET totp_last_counter = ? WHERE id = ?').run(counter, user.id);
+  } else {
     // recovery code?
     const codes = JSON.parse(user.recovery_codes || '[]');
     const hash = sha256(body.code.toLowerCase().replace(/\s+/g, ''));
@@ -144,9 +158,19 @@ router.post('/mfa', authLimiter, requireMfaPending, (req, res) => {
       ok = true;
     }
   }
-  if (!ok) throw unauthorized('That code is not valid');
+  if (!ok) {
+    const attempts = (req.session.mfa_attempts || 0) + 1;
+    if (attempts >= MFA_MAX_ATTEMPTS) {
+      destroySession(req.session.id);
+      clearSessionCookie(req, res);
+      // Deliberately the same wording whether the code was wrong, reused, or the tries ran out.
+      throw unauthorized('That code is not valid. Sign in again to retry.');
+    }
+    db.prepare('UPDATE sessions SET mfa_attempts = ? WHERE id = ?').run(attempts, req.session.id);
+    throw unauthorized('That code is not valid');
+  }
   const ttlMs = config.sessionTtlDays * 24 * 60 * 60 * 1000;
-  db.prepare('UPDATE sessions SET mfa_pending = 0, expires_at = ?, last_seen_at = ? WHERE id = ?')
+  db.prepare('UPDATE sessions SET mfa_pending = 0, mfa_attempts = 0, expires_at = ?, last_seen_at = ? WHERE id = ?')
     .run(new Date(Date.now() + ttlMs).toISOString(), now(), req.session.id);
   setSessionCookie(req, res, req.sessionToken, Math.floor(ttlMs / 1000));
   res.json(mePayload(user));
@@ -174,8 +198,29 @@ router.post('/me/password', requireAuth, authLimiter, async (req, res) => {
   const hash = await hashPassword(body.newPassword);
   db.prepare('UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?').run(hash, now(), req.user.id);
   db.prepare('DELETE FROM sessions WHERE user_id = ? AND id != ?').run(req.user.id, req.session.id);
-  res.json({ ok: true });
+  // API keys outlive sessions, so signing the other devices out is not enough on its own.
+  const revoked = revokeKeysOf(req.user, 'the password was changed');
+  res.json({ ok: true, revokedKeys: revoked });
 });
+
+// Revokes every live API key belonging to a user, and notes it in each affected company's log.
+export function revokeKeysOf(user, reason) {
+  const live = all('SELECT id, name, company_id FROM api_keys WHERE user_id = ? AND revoked_at IS NULL', user.id);
+  if (!live.length) return 0;
+  db.prepare('UPDATE api_keys SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL').run(now(), user.id);
+  for (const companyId of new Set(live.map((k) => k.company_id))) {
+    const names = live.filter((k) => k.company_id === companyId).map((k) => `"${k.name}"`).join(', ');
+    logActivity({
+      companyId,
+      userId: user.id,
+      action: 'deleted',
+      entityType: 'apikey',
+      entityId: null,
+      summary: `${user.name} revoked ${names} because ${reason}`,
+    });
+  }
+  return live.length;
+}
 
 router.get('/me/sessions', requireAuth, (req, res) => {
   const rows = all('SELECT id, ip, user_agent, created_at, last_seen_at, expires_at FROM sessions WHERE user_id = ? AND mfa_pending = 0 ORDER BY last_seen_at DESC', req.user.id);

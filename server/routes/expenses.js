@@ -186,8 +186,14 @@ router.get('/expenses/export.csv', (req, res) => {
   const projects = new Map(listProjects(req.company.id).map((p) => [p.id, p.name]));
   const categories = new Map(all('SELECT id, name FROM categories WHERE company_id = ?', req.company.id).map((c) => [c.id, c.name]));
   const members = new Map(getMembers(req.company.id).map((m) => [m.id, m.name]));
+  // A cell that starts with = + - @ (or a tab/carriage return, which spreadsheets strip before they
+  // decide) is executed as a formula by Excel, Sheets and LibreOffice. An apostrophe forces it to be
+  // text. Plain numbers are exempt, so a negative amount stays a number rather than becoming text.
+  const FORMULA_LEAD = /^[=+\-@\t\r]/;
+  const PLAIN_NUMBER = /^-?\d+(?:\.\d+)?$/;
   const esc = (v) => {
-    const s = v == null ? '' : String(v);
+    let s = v == null ? '' : String(v);
+    if (FORMULA_LEAD.test(s) && !PLAIN_NUMBER.test(s)) s = `'${s}`;
     return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
   };
   const lines = [['Date', 'Amount', 'Currency', 'Vendor', 'Description', 'Category', 'Project', 'Paid by', 'Status', 'Payment method', 'Recurring', 'Notes'].join(',')];
@@ -312,6 +318,7 @@ router.post('/expenses/:id/receipts', rawBody, (req, res) => {
   const id = uid();
   db.prepare('INSERT INTO receipts (id, company_id, expense_id, filename_enc, mime, size, stored_name, uploaded_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
     .run(id, req.company.id, row.id, encrypt(filename), mime, req.body.length, storedName, req.user.id, now());
+  logActivity({ companyId: req.company.id, userId: req.user.id, action: 'attached', entityType: 'expense', entityId: row.id, summary: `${req.user.name} attached the receipt "${filename}"` });
   res.status(201).json(receiptRow(one('SELECT * FROM receipts WHERE id = ?', id)));
 });
 
@@ -336,6 +343,7 @@ router.delete('/receipts/:id', (req, res) => {
   if (exp && !canEdit(req, expenseRow(exp))) throw forbidden();
   db.prepare('DELETE FROM receipts WHERE id = ?').run(r.id);
   fs.rm(path.join(config.dataDir, 'uploads', r.stored_name), { force: true }, () => {});
+  logActivity({ companyId: req.company.id, userId: req.user.id, action: 'deleted', entityType: 'expense', entityId: r.expense_id, summary: `${req.user.name} removed the receipt "${receiptRow(r).filename}"` });
   res.json({ ok: true });
 });
 

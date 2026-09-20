@@ -8,12 +8,14 @@ import { toast } from './components/toast.js';
 import { openExpenseModal } from './views/expenses.js';
 import { openTaskModal } from './views/board.js';
 import { openProjectModal } from './views/projects.js';
+import { openTopicModal } from './views/discussions.js';
 
 const NAV = [
   { name: 'dashboard', href: '/', label: 'Dashboard', icon: 'dashboard' },
   { name: 'projects', href: '/projects', label: 'Projects', icon: 'folder', count: () => state.counts.projects },
   { name: 'expenses', href: '/expenses', label: 'Expenses', icon: 'receipt', match: ['expenses', 'summary'] },
   { name: 'board', href: '/board', label: 'Task board', icon: 'board', count: () => state.counts.openTasks },
+  { name: 'discussions', href: '/discussions', label: 'Discussions', icon: 'message', match: ['discussions', 'discussion'] },
   { name: 'activity', href: '/activity', label: 'Activity', icon: 'activity' },
   { name: 'developers', href: '/developers', label: 'API', icon: 'code' },
   { name: 'settings', href: '/settings', label: 'Settings', icon: 'settings' },
@@ -56,6 +58,7 @@ function quickItems() {
     { label: 'New expense', icon: 'receipt', onclick: () => openExpenseModal() },
     { label: 'New task', icon: 'checkSquare', onclick: () => openTaskModal() },
     { label: 'New project', icon: 'folder', onclick: () => openProjectModal() },
+    { label: 'New topic', icon: 'message', onclick: () => openTopicModal({ onSaved: (t) => navigate(`/discussions/${t.id}`) }) },
   ];
 }
 
