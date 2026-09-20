@@ -64,6 +64,39 @@ test('errors are clear, exit non-zero, and still hide the key', async () => {
   assert.match(down.stderr, /Could not reach/);
 });
 
+test('login input handling: bare domains, messy pastes, and a hidden key prompt', async () => {
+  const { normalizeUrl, extractKey, promptLogin } = await import('../scripts/keel.js');
+  assert.equal(normalizeUrl('keel.example.com'), 'https://keel.example.com');
+  assert.equal(normalizeUrl(' https://keel.example.com/api/v1/ '), 'https://keel.example.com');
+  assert.equal(normalizeUrl('localhost:3000'), 'http://localhost:3000');
+  assert.equal(normalizeUrl('127.0.0.1:3000/'), 'http://127.0.0.1:3000');
+  assert.equal(normalizeUrl('', 'http://127.0.0.1:3000'), 'http://127.0.0.1:3000');
+
+  const key = 'keel_AbCdEfGhIjKlMnOpQrStUvWxYz0123456789_-xyz';
+  assert.equal(extractKey(key), key);
+  assert.equal(extractKey(`  "${key}"  `), key);
+  assert.equal(extractKey(`Bearer ${key}`), key);
+  assert.equal(extractKey(`[200~${key}[201~`), key, 'bracketed paste markers are ignored');
+  assert.equal(extractKey(`﻿${key}\r`), key);
+  assert.equal(extractKey('keel_short'), null);
+  assert.equal(extractKey('sk-something-else-entirely-0000000000'), null);
+  assert.equal(extractKey(''), null);
+
+  // Both answers typed with Windows line endings, the way a real terminal delivers them.
+  const { PassThrough } = await import('node:stream');
+  const input = new PassThrough(); const output = new PassThrough();
+  let shown = ''; output.on('data', (d) => { shown += d; });
+  const pending = promptLogin(input, output, 'http://127.0.0.1:3000');
+  input.write('keel.example.com\r\n');
+  await new Promise((r) => setTimeout(r, 50));
+  input.write(`${key}\r\n`);
+  const answer = await pending;
+  assert.equal(answer.url, 'https://keel.example.com');
+  assert.equal(extractKey(answer.raw), key);
+  assert.ok(!shown.includes(key), 'the key is never echoed to the terminal');
+  assert.match(shown, /API key \(input is hidden/);
+});
+
 test('login refuses to run without a real terminal, and logout forgets the key', async () => {
   const login = await run(['login'], { input: `${secret}\n` });
   assert.notEqual(login.code, 0);
